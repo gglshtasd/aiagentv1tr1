@@ -5,29 +5,44 @@ export default function SuperAdminPanel() {
   const [models, setModels] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [inviteKeys, setInviteKeys] = useState<any[]>([]);
+  const [logs, setLogs] = useState<any[]>([]);
   
-  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS'>('MODELS');
+  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY'>('MODELS');
   const [isTesting, setIsTesting] = useState(false);
 
-  // --- NEW STATE FOR ADDING MODELS ---
+  // --- MODEL STATE ---
   const [newModelId, setNewModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
   const [newModelTier, setNewModelTier] = useState('CHAT');
 
   useEffect(() => {
     fetchData();
+    logDevicePresence();
   }, []);
+
+  const logDevicePresence = async () => {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (session) {
+      await fetch('/api/auth/log-device', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` }
+      }).catch(console.error);
+    }
+  };
 
   const fetchData = async () => {
     const { data: mData } = await supabaseClient.from('model_registry').select('*').order('tier');
-    const { data: uData } = await supabaseClient.from('users').select('*');
+    const { data: uData } = await supabaseClient.from('users').select('*').order('created_at', { ascending: false });
     const { data: kData } = await supabaseClient.from('invite_codes').select('*').order('created_at', { ascending: false });
+    const { data: lData } = await supabaseClient.from('login_activity').select('*').order('login_time', { ascending: false }).limit(50);
     
     if (mData) setModels(mData);
     if (uData) setUsers(uData);
     if (kData) setInviteKeys(kData);
+    if (lData) setLogs(lData);
   };
 
+  // --- MODEL FUNCTIONS ---
   const toggleModelStatus = async (modelId: string, currentStatus: boolean) => {
     await supabaseClient.from('model_registry').update({ is_available: !currentStatus }).eq('model_id', modelId);
     fetchData();
@@ -45,9 +60,20 @@ export default function SuperAdminPanel() {
     }
   };
 
+  const addModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { error } = await supabaseClient.from('model_registry').insert({
+      model_id: newModelId, friendly_name: newModelName, tier: newModelTier, is_available: false
+    });
+    if (error) alert('Failed to add model: ' + error.message);
+    else {
+      setNewModelId(''); setNewModelName(''); setNewModelTier('CHAT'); fetchData();
+    }
+  };
+
+  // --- USER FUNCTIONS ---
   const updateCreditLimit = async (userId: string, newLimit: number) => {
     await supabaseClient.from('users').update({ monthly_credit_limit_inr: newLimit }).eq('id', userId);
-    alert('Limit Updated Successfully');
     fetchData();
   };
 
@@ -56,57 +82,36 @@ export default function SuperAdminPanel() {
     fetchData();
   };
 
+  // --- KEY FUNCTIONS ---
   const generateNewKey = async () => {
     const { data, error } = await supabaseClient.from('invite_codes').insert({}).select().single();
-    if (data) {
-      setInviteKeys([data, ...inviteKeys]);
-    } else {
-      alert('Failed to generate key');
-    }
-  };
-
-  // --- NEW FUNCTION TO ADD MODELS ---
-  const addModel = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const { error } = await supabaseClient.from('model_registry').insert({
-      model_id: newModelId,
-      friendly_name: newModelName,
-      tier: newModelTier,
-      is_available: false // Defaults to false until audited
-    });
-    
-    if (error) alert('Failed to add model: ' + error.message);
-    else {
-      setNewModelId('');
-      setNewModelName('');
-      setNewModelTier('CHAT');
-      fetchData(); // Refresh the list
-    }
+    if (data) setInviteKeys([data, ...inviteKeys]);
+    else alert('Failed to generate key: ' + error?.message);
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100 p-8">
+    <div className="min-h-screen bg-gray-900 text-gray-100 p-8 font-sans">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">Gateway Control Plane</h1>
+        <h1 className="text-3xl font-bold mb-6 tracking-tight">Gateway Control Plane</h1>
         
-        <div className="flex gap-4 mb-8">
-          <button onClick={() => setActiveTab('MODELS')} className={`px-4 py-2 rounded font-semibold ${activeTab === 'MODELS' ? 'bg-blue-600' : 'bg-gray-800'}`}>AI Provider Settings</button>
-          <button onClick={() => setActiveTab('USERS')} className={`px-4 py-2 rounded font-semibold ${activeTab === 'USERS' ? 'bg-blue-600' : 'bg-gray-800'}`}>User Limits & Billing</button>
-          <button onClick={() => setActiveTab('KEYS')} className={`px-4 py-2 rounded font-semibold ${activeTab === 'KEYS' ? 'bg-blue-600' : 'bg-gray-800'}`}>Invite Keys</button>
+        <div className="flex flex-wrap gap-4 mb-8">
+          <button onClick={() => setActiveTab('MODELS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'MODELS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>AI Registry</button>
+          <button onClick={() => setActiveTab('USERS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'USERS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Financial Limits</button>
+          <button onClick={() => setActiveTab('KEYS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'KEYS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Invite Keys</button>
+          <button onClick={() => setActiveTab('ACTIVITY')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'ACTIVITY' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Telemetry</button>
         </div>
 
-        {/* MODELS TAB */}
+        {/* 1. MODELS TAB */}
         {activeTab === 'MODELS' && (
-          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold">Model Registry & Toggles</h2>
-              <button onClick={runGlobalAudit} disabled={isTesting} className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white px-4 py-2 rounded text-sm font-bold">
+              <button onClick={runGlobalAudit} disabled={isTesting} className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white px-4 py-2 rounded text-sm font-bold shadow">
                 {isTesting ? 'Running Sweep...' : 'Run Availability Audit'}
               </button>
             </div>
 
-            {/* NEW ADD MODEL FORM */}
-            <form onSubmit={addModel} className="mb-6 p-4 bg-gray-900 rounded border border-gray-700 flex flex-wrap md:flex-nowrap gap-4 items-end">
+            <form onSubmit={addModel} className="mb-6 p-4 bg-gray-900 rounded border border-gray-700 flex flex-wrap md:flex-nowrap gap-4 items-end shadow-inner">
               <div className="flex-1 w-full">
                 <label className="block text-xs mb-1 text-gray-400">Model ID</label>
                 <input value={newModelId} onChange={e => setNewModelId(e.target.value)} required className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500" placeholder="e.g. anthropic.claude-3-haiku" />
@@ -121,6 +126,7 @@ export default function SuperAdminPanel() {
                   <option value="CHAT">CHAT</option>
                   <option value="GIT">GIT</option>
                   <option value="SANDBOX">SANDBOX</option>
+                  <option value="SYSTEM">SYSTEM</option>
                 </select>
               </div>
               <button type="submit" className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded text-sm font-bold h-[38px] whitespace-nowrap w-full md:w-auto">Add Model</button>
@@ -128,12 +134,12 @@ export default function SuperAdminPanel() {
 
             <div className="space-y-3">
               {models.map(m => (
-                <div key={m.model_id} className="flex justify-between items-center p-3 bg-gray-700/50 rounded">
+                <div key={m.model_id} className="flex justify-between items-center p-3 bg-gray-700/50 rounded hover:bg-gray-700/80 transition-colors">
                   <div>
                     <div className="font-bold">{m.friendly_name}</div>
-                    <div className="text-xs text-gray-400 font-mono">{m.model_id} • Tier: {m.tier.toUpperCase()}</div>
+                    <div className="text-xs text-gray-400 font-mono">{m.model_id} • Tier: <span className="text-blue-300">{m.tier.toUpperCase()}</span></div>
                   </div>
-                  <button onClick={() => toggleModelStatus(m.model_id, m.is_available)} className={`px-4 py-2 rounded font-bold text-xs w-28 ${m.is_available ? 'bg-green-600 text-white' : 'bg-red-900/80 text-red-200'}`}>
+                  <button onClick={() => toggleModelStatus(m.model_id, m.is_available)} className={`px-4 py-2 rounded font-bold text-xs w-28 transition-colors ${m.is_available ? 'bg-green-600 text-white hover:bg-green-500' : 'bg-red-900/80 text-red-200 hover:bg-red-800'}`}>
                     {m.is_available ? 'ENABLED' : 'DISABLED'}
                   </button>
                 </div>
@@ -142,24 +148,24 @@ export default function SuperAdminPanel() {
           </div>
         )}
 
-        {/* USERS TAB */}
+        {/* 2. USERS TAB */}
         {activeTab === 'USERS' && (
-          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
             <h2 className="text-xl font-bold mb-6">User Financial Guardrails</h2>
             <div className="space-y-4">
               {users.map(u => (
-                <div key={u.id} className="flex flex-col md:flex-row justify-between p-4 bg-gray-700/50 rounded gap-4">
+                <div key={u.id} className="flex flex-col md:flex-row justify-between p-4 bg-gray-700/50 rounded gap-4 hover:bg-gray-700/80 transition-colors">
                   <div>
-                    <div className="font-bold">{u.email} <span className="text-xs bg-gray-600 px-2 py-1 rounded ml-2 uppercase">{u.role}</span></div>
-                    <div className="text-sm mt-1">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_inr}</span></div>
+                    <div className="font-bold">{u.email} <span className={`text-xs px-2 py-1 rounded ml-2 uppercase ${u.role === 'admin' ? 'bg-red-900/80 text-red-200' : 'bg-gray-600 text-gray-200'}`}>{u.role}</span></div>
+                    <div className="text-sm mt-1 text-gray-400">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_inr}</span></div>
                   </div>
                   <div className="flex flex-wrap gap-4 items-center">
-                    <button onClick={() => toggleAdvancedMode(u.id, u.advanced_mode_enabled)} className={`px-3 py-1 rounded text-xs font-bold ${u.advanced_mode_enabled ? 'bg-orange-500 text-white' : 'bg-gray-600 text-gray-300'}`}>
+                    <button onClick={() => toggleAdvancedMode(u.id, u.advanced_mode_enabled)} className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${u.advanced_mode_enabled ? 'bg-orange-500 hover:bg-orange-400 text-white shadow' : 'bg-gray-600 hover:bg-gray-500 text-gray-300'}`}>
                       {u.advanced_mode_enabled ? '★ ADVANCED ON' : 'AUTO MODE ONLY'}
                     </button>
-                    <div className="flex gap-2">
-                      <input type="number" id={`limit-${u.id}`} defaultValue={u.monthly_credit_limit_inr} className="w-24 p-1 bg-gray-900 border border-gray-600 rounded text-center text-sm" />
-                      <button onClick={() => { const val = parseFloat((document.getElementById(`limit-${u.id}`) as HTMLInputElement).value); updateCreditLimit(u.id, val); }} className="bg-blue-600 px-3 py-1 rounded text-xs font-bold">SET LIMIT</button>
+                    <div className="flex gap-2 bg-gray-900 p-1 rounded border border-gray-600">
+                      <input type="number" id={`limit-${u.id}`} defaultValue={u.monthly_credit_limit_inr} className="w-24 p-1 bg-transparent text-center text-sm focus:outline-none" />
+                      <button onClick={() => { const val = parseFloat((document.getElementById(`limit-${u.id}`) as HTMLInputElement).value); updateCreditLimit(u.id, val); }} className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs font-bold transition-colors">SET LIMIT</button>
                     </div>
                   </div>
                 </div>
@@ -168,25 +174,57 @@ export default function SuperAdminPanel() {
           </div>
         )}
 
-        {/* KEYS TAB */}
+        {/* 3. KEYS TAB */}
         {activeTab === 'KEYS' && (
-          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold">Access Invite Keys</h2>
-              <button onClick={generateNewKey} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold">
-                + Generate New Key
+              <button onClick={generateNewKey} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold shadow transition-colors">
+                + Generate UUID Key
               </button>
             </div>
             <div className="space-y-2">
               {inviteKeys.map(k => (
-                <div key={k.code} className="flex justify-between p-3 bg-gray-900 rounded font-mono text-sm border border-gray-700">
-                  <span className="text-blue-400">{k.code}</span>
-                  <span className={k.is_active ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
-                    {k.is_active ? 'VALID' : 'USED'}
+                <div key={k.code} className="flex justify-between items-center p-3 bg-gray-900 rounded font-mono text-sm border border-gray-700">
+                  <span className="text-blue-400 select-all">{k.code}</span>
+                  <span className={`px-2 py-1 rounded text-xs font-bold ${k.is_active ? 'bg-green-900/50 text-green-400 border border-green-800' : 'bg-red-900/50 text-red-400 border border-red-800'}`}>
+                    {k.is_active ? 'VALID' : 'BURNED'}
                   </span>
                 </div>
               ))}
+              {inviteKeys.length === 0 && <div className="text-gray-500 text-sm italic">No invite keys generated yet.</div>}
             </div>
+          </div>
+        )}
+
+        {/* 4. ACTIVITY TAB */}
+        {activeTab === 'ACTIVITY' && (
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg overflow-x-auto">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Access Telemetry Logs</h2>
+              <button onClick={fetchData} className="text-sm bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded transition-colors">🔄 Refresh</button>
+            </div>
+            <table className="w-full text-left text-sm text-gray-300">
+              <thead className="text-xs text-gray-500 uppercase bg-gray-900 border-b border-gray-700">
+                <tr>
+                  <th className="px-4 py-3 font-semibold">Timestamp</th>
+                  <th className="px-4 py-3 font-semibold">Account Vector</th>
+                  <th className="px-4 py-3 font-semibold">IP Origin</th>
+                  <th className="px-4 py-3 font-semibold">Device Signature</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-700">
+                {logs.map((log) => (
+                  <tr key={log.id} className="hover:bg-gray-700/50 transition-colors">
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-400">{new Date(log.login_time).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-bold text-white">{log.email}</td>
+                    <td className="px-4 py-3 font-mono text-blue-400">{log.ip_address}</td>
+                    <td className="px-4 py-3 truncate max-w-xs text-xs text-gray-400" title={log.user_agent}>{log.user_agent}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {logs.length === 0 && <div className="p-4 text-center text-gray-500 text-sm italic border-t border-gray-700">Awaiting incoming connection data...</div>}
           </div>
         )}
 
