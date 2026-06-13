@@ -15,32 +15,20 @@ function makeDeps(overrides: Partial<TierClassifierDependencies> = {}): TierClas
   return {
     validateRequest: () => [],
     getUser: async () => validUser,
+    getAvailableModels: async (tier) => tier === 'CHAT' ? ['claude-3.5-sonnet'] : ['llama-3.1-405b'], // <-- THIS IS THE NEW LINE
     getAccess: async (userId, tier) => [
-      {
-        id: 'a',
-        user_id: userId,
-        model_name: tier === 'CHAT' ? 'claude-3.5-sonnet' : 'llama-3.1-405b',
-        tier,
-        max_tokens_per_month: 100000,
-        max_tokens_per_request: 4000,
-        cost_multiplier: 1,
-        enabled: true,
-        created_at: '2026-01-01T00:00:00.000Z',
-      },
+      { user_id: userId, model_name: 'claude-3.5-sonnet', tier: 'CHAT', enabled: true },
+      { user_id: userId, model_name: 'llama-3.1-405b', tier: 'GIT', enabled: true },
     ],
-    getMonthlyUsage: async () => 100,
-    estimateInputTokens,
-    estimateOutputTokens: (inputTokens, tier) => {
-      const completionMax = tier === 'CHAT' ? 2000 : tier === 'GIT' ? 4000 : 8000;
-      return Math.min(completionMax, Math.max(1, Math.ceil(inputTokens * 0.2)));
-    },
-    enforceRequestTokenLimit: () => undefined,
-    enforceMonthlyLimit: () => undefined,
-    estimateCost,
+    getMonthlyUsage: async () => 500,
+    estimateInputTokens: () => 100,
+    estimateOutputTokens: () => 50,
+    enforceRequestTokenLimit: () => {},
+    enforceMonthlyLimit: () => {},
+    estimateCost: () => 0.05,
     ...overrides,
   };
 }
-
 function makeRequest(tier: Tier, prompt = 'hello world'): ClassifyRequest {
   return {
     prompt,
