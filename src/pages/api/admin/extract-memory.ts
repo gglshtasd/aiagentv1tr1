@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Save silently to Supabase Ledger
     await supabaseClient
-      .from('profiles')
+      .from('users')
       .update({ developer_profile: extractedData })
       .eq('id', userId);
 
