@@ -3,17 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
     "test": "vitest run tests/unit/tier-classifier.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.50.0",
     "next": "^15.5.18",
-    "posthog-node": "^5.8.0"
+    "posthog-node": "^5.8.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.0"
   }
