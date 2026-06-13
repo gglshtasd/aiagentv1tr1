@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import ModelSelector from './ModelSelector';
+import ModelSelector from '../components/ModelSelector';
 
 export default function RequestForm() {
   const [prompt, setPrompt] = useState('');
