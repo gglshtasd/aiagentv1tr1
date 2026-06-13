@@ -1,63 +1,63 @@
-// src/pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { classifyTierRequest } from '../../lib/tier-classifier';
-import { getSupabaseClient } from '../../lib/supabase';
-import type { APIResponse, ClassifyRequest } from '../../types/api';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<APIResponse<any>>
-) {
+// Initialize the AWS Bedrock Client using your Vercel Env Variables
+const bedrockClient = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
+});
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Only allow POST requests
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'method not allowed', requestId: '', timestamp: new Date().toISOString() });
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const userId = req.headers['x-user-id'] as string;
-  const { prompt } = req.body;
-
   try {
-    // 1. Run Pre-Flight Validation & Routing
-    const classification = await classifyTierRequest({
-      prompt,
-      user_id: userId,
-      requested_tier: 'CHAT'
+    // Extract prompt and requested model (defaulting to Sonnet)
+    const { prompt, modelId = 'anthropic.claude-3-sonnet-20240229-v1:0' } = req.body;
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt vector is required' });
+    }
+
+    // Format the payload specifically for Claude 3 Models on Bedrock
+    const payload = {
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: 1024,
+      messages: [
+        { role: "user", content: [{ type: "text", text: prompt }] }
+      ]
+    };
+
+    // Construct the execution command
+    const command = new InvokeModelCommand({
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+      modelId: modelId,
     });
 
-    // 2. TODO: Implement Prompt Compression (LLMLingua) here
-    // const compressedPrompt = await compressPrompt(prompt);
+    // Fire the request to AWS
+    const response = await bedrockClient.send(command);
+    
+    // Decode the response buffer back into a JSON object
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
-    // 3. Call AWS Bedrock (Placeholder for your AWS SDK / LiteLLM fetch call)
-    // const bedrockResponse = await fetch('YOUR_LITELLM_URL', { ... });
-    const mockOutputTokens = 250; 
-    const mockResponseText = "This is the generated AI response from AWS Bedrock.";
-
-    // 4. Log the transaction to the Immutable Ledger
-    const supabase = getSupabaseClient();
-    await supabase.from('admin_requests').insert({
-      user_id: userId,
-      request_id: classification.request_id,
-      tier: 'CHAT',
-      model: classification.model,
-      input_tokens: classification.estimated_tokens,
-      output_tokens: mockOutputTokens,
-      cost_usd: classification.estimated_cost, // Mark-up applied in tier-classifier
-      status: 'completed',
-      completed_at: new Date().toISOString()
-    });
-
+    // Return the successful text and token usage
     return res.status(200).json({
       success: true,
-      data: { text: mockResponseText },
-      requestId: classification.request_id,
-      timestamp: new Date().toISOString(),
+      text: responseBody.content[0].text,
+      usage: responseBody.usage,
     });
 
   } catch (error: any) {
-    return res.status(500).json({
-      success: false,
-      error: error.message,
-      requestId: 'error',
-      timestamp: new Date().toISOString()
+    console.error('Bedrock Execution Error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to connect to execution layer' 
     });
   }
 }
