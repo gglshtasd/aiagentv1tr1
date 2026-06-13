@@ -17,15 +17,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  try {
-    const { prompt, modelId } = req.body;
+  // FIX: Destructure outside the try-catch block so 'modelId' is globally scoped for this handler
+  const { prompt, modelId } = req.body || {};
 
+  try {
     if (!prompt) {
       return res.status(400).json({ error: 'Prompt vector is required' });
     }
 
-    // Pass the modelId directly as received from the database. 
-    // Do not mutate it with 'us.' or 'anthropic.' prefixes.
     const message = await anthropic.messages.create({
       model: modelId, 
       max_tokens: 1024,
@@ -41,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error: any) {
     console.error('Bedrock Execution Error:', error);
     
-    // INTERCEPT 404: If the model doesn't exist, query the gateway for the exact models it DOES support.
+    // modelId is now safely accessible here
     if (error.status === 404 || error.message?.includes('not_found_error')) {
       try {
         const modelsList = await anthropic.models.list();
