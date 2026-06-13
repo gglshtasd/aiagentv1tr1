@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabaseClient } from '../lib/supabase-client';
 
 export default function LoginPage() {
@@ -11,12 +11,27 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
+  // NEW: Background listener to prevent getting stuck on the login page
+  useEffect(() => {
+    const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        supabaseClient.from('users').select('role').eq('id', session.user.id).single().then(({data}) => {
+           window.location.href = data?.role === 'admin' ? '/admin' : '/chat';
+        });
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
   const handleGoogleLogin = async () => {
     setLoading(true);
     try {
       const { error } = await supabaseClient.auth.signInWithOAuth({
         provider: 'google',
-        options: { redirectTo: `${window.location.origin}/chat` }
+        options: { 
+          // FIX: Send Google response to the new server callback route
+          redirectTo: `${window.location.origin}/api/auth/callback` 
+        }
       });
       if (error) throw error;
     } catch (err: any) {
@@ -32,7 +47,6 @@ export default function LoginPage() {
 
     try {
       if (isSigningUp) {
-        // 1. Verify the Invite Code
         const isMasterKey = inviteCode === process.env.NEXT_PUBLIC_STARTER_KEY;
         let isValidDbKey = false;
         
@@ -47,22 +61,19 @@ export default function LoginPage() {
           throw new Error('Access Denied: Invalid or Used Invite Key.');
         }
 
-        // 2. Create the Account
         const { data: authData, error: authError } = await supabaseClient.auth.signUp({ email, password });
         if (authError) throw authError;
 
         if (authData.user) {
-          // 3. Upsert to ensure role is properly set (overriding triggers if needed)
           const assignedRole = isMasterKey ? 'admin' : 'user';
           await supabaseClient.from('users').upsert({
             id: authData.user.id,
             email: email,
             role: assignedRole,
             advanced_mode_enabled: isMasterKey,
-            monthly_credit_limit_inr: isMasterKey ? 50000 : 500 // Give friends a default 500 limit
+            monthly_credit_limit_inr: isMasterKey ? 50000 : 500 
           });
 
-          // 4. Burn the invite key
           if (isValidDbKey) {
             await supabaseClient.from('invite_codes').update({ is_active: false }).eq('code', inviteCode);
           }
@@ -72,19 +83,10 @@ export default function LoginPage() {
         setIsSigningUp(false);
         setPassword('');
       } else {
-        // --- STANDARD LOGIN ---
-        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        
         setMessage('Access granted. Routing...');
-
-        const { data: userRecord } = await supabaseClient
-          .from('users')
-          .select('role')
-          .eq('id', data.user.id)
-          .maybeSingle();
-        
-        window.location.href = userRecord?.role === 'admin' ? '/admin' : '/chat';
+        // The useEffect at the top will handle the actual redirection automatically
       }
     } catch (err: any) {
       setMessage(err.message || 'An error occurred.');
@@ -98,7 +100,6 @@ export default function LoginPage() {
       <div className="max-w-md w-full p-8 bg-gray-800 rounded-xl shadow-2xl border border-gray-700">
         <h2 className="text-3xl font-bold mb-6 text-center tracking-tight">Gateway Access</h2>
         
-        {/* Google OAuth Option */}
         <button 
           onClick={handleGoogleLogin} 
           disabled={loading} 
@@ -119,7 +120,6 @@ export default function LoginPage() {
           <div className="flex-grow border-t border-gray-600"></div>
         </div>
 
-        {/* Email Auth Form */}
         <form onSubmit={handleEmailAuth} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-400">Email Vector</label>
