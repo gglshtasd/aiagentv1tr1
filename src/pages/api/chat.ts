@@ -21,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': process.env.BEDROCK_API_KEY || '',
-        'anthropic-workspace-id': process.env.BEDROCK_WORKSPACE_ID || '',
+        'openai-project': process.env.BEDROCK_WORKSPACE_ID || '', // <-- Fix applied here
       },
       body: JSON.stringify({
         model: modelId, // Safely accepts "openai.gpt-5.4", "nvidia.nemotron...", etc.
