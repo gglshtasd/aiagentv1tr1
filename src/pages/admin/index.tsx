@@ -36,7 +36,37 @@ export default function SuperAdminPanel() {
       setIsTesting(false);
     }
   };
+// Inside Admin Panel state:
+const [inviteKeys, setInviteKeys] = useState<any[]>([]);
 
+const generateNewKey = async () => {
+  // Inserts a new uuid directly into invite_codes
+  const { data, error } = await supabaseClient.from('invite_codes').insert({}).select().single();
+  if (data) setInviteKeys([data, ...inviteKeys]);
+};
+
+// ... Inside the return statement, add the Keys Tab UI:
+{activeTab === 'KEYS' && (
+  <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+    <div className="flex justify-between items-center mb-6">
+      <h2 className="text-xl font-bold">Access Invite Keys</h2>
+      <button onClick={generateNewKey} className="bg-green-600 text-white px-4 py-2 rounded font-bold">
+        + Generate New Key
+      </button>
+    </div>
+    
+    <div className="space-y-2">
+      {inviteKeys.map(k => (
+        <div key={k.code} className="flex justify-between p-3 bg-gray-900 rounded font-mono text-sm border border-gray-700">
+          <span className="text-blue-400">{k.code}</span>
+          <span className={k.is_active ? 'text-green-400' : 'text-red-400'}>
+            {k.is_active ? 'VALID' : 'USED'}
+          </span>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
   // Adjust a user's credit limit
   const updateCreditLimit = async (userId: string, newLimit: number) => {
     await supabaseClient.from('profiles').update({ monthly_credit_limit_inr: newLimit }).eq('id', userId);
