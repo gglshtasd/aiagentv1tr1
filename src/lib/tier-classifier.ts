@@ -12,20 +12,36 @@ import {
   getMonthlyTokenUsage, 
   getUserByIdOrEmail, 
   getUserModelAccess, 
-  getAvailableModels, // NEW IMPORT
+  getAvailableModels, 
   type UserModelAccessRecord, 
   type UserRecord 
 } from './supabase';
 import { validateClassifyRequest } from './validators';
 
-// ... (Error definitions remain the same)
+export type ClassifierErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'INVALID_USER'
+  | 'UNAUTHORIZED_TIER'
+  | 'LIMIT_EXCEEDED'
+  | 'INTERNAL_ERROR';
+
+export class ClassifierError extends Error {
+  public readonly code: ClassifierErrorCode;
+  public readonly requestId: string;
+
+  constructor(code: ClassifierErrorCode, message: string, requestId: string) {
+    super(message);
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
 
 export interface TierClassifierDependencies {
   validateRequest: (input: ClassifyRequest) => string[];
   getUser: (userId: string) => Promise<UserRecord | null>;
   getAccess: (userId: string, tier: Tier) => Promise<UserModelAccessRecord[]>;
   getMonthlyUsage: (userId: string, tier: Tier) => Promise<number>;
-  getAvailableModels: (tier: Tier) => Promise<string[]>; // NEW DEPENDENCY
+  getAvailableModels: (tier: Tier) => Promise<string[]>; 
   estimateInputTokens: (prompt: string) => number;
   estimateOutputTokens: (inputTokens: number, tier: Tier) => number;
   enforceRequestTokenLimit: (inputTokens: number, tier: Tier) => void;
@@ -38,7 +54,7 @@ const defaultDependencies: TierClassifierDependencies = {
   getUser: getUserByIdOrEmail,
   getAccess: getUserModelAccess,
   getMonthlyUsage: getMonthlyTokenUsage,
-  getAvailableModels, // INJECTED
+  getAvailableModels, 
   estimateInputTokens,
   estimateOutputTokens,
   enforceRequestTokenLimit,
@@ -50,7 +66,6 @@ function makeRequestId(): string {
   return `req_${randomUUID()}`;
 }
 
-// UPDATED TO USE DYNAMIC DB ARRAY
 function selectModel(accessRows: UserModelAccessRecord[], availableModels: string[]): string {
   for (const model of availableModels) {
     const match = accessRows.find((row) => row.model_name === model);
@@ -92,7 +107,6 @@ export async function classifyTierRequest(
     throw new ClassifierError('LIMIT_EXCEEDED', (error as Error).message, requestId);
   }
 
-  // FETCH DYNAMIC MODELS AND ROUTE
   const availableModels = await deps.getAvailableModels(input.requested_tier);
   const selectedModel = selectModel(accessRows, availableModels);
   
