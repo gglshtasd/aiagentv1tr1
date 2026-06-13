@@ -2,8 +2,10 @@
 
 import { useState } from 'react';
 import { supabaseClient } from '../lib/supabase-client';
+import { useRouter } from 'next/router';
 
 export default function LoginPage() {
+  const router = useRouter(); // 1. Initialize the Next.js router
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [starterKey, setStarterKey] = useState('');
@@ -16,26 +18,66 @@ export default function LoginPage() {
     setLoading(true);
     setMessage('');
 
-    if (isSigningUp) {
-      // The Trap: Block random registrations
-      if (starterKey !== process.env.NEXT_PUBLIC_STARTER_KEY) {
-        setMessage('Access Denied: Invalid Starter Key.');
-        setLoading(false);
-        return;
-      }
+    try {
+      if (isSigningUp) {
+        // 2. Validate against Master ENV Key OR generated Database Invite Keys
+        const isMasterKey = starterKey === process.env.NEXT_PUBLIC_STARTER_KEY;
+        let isValidDbKey = false;
+        
+        // Only check DB if it's a properly formatted UUID (prevents Supabase type errors)
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(starterKey);
 
-      const { error } = await supabaseClient.auth.signUp({ email, password });
-      if (error) setMessage(error.message);
-      else setMessage('Registration successful. You may now log in.');
-    } else {
-      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if (error) setMessage(error.message);
-      else {
+        if (!isMasterKey && isUUID) {
+          const { data: keyData } = await supabaseClient
+            .from('invite_codes')
+            .select('*')
+            .eq('code', starterKey)
+            .eq('is_active', true)
+            .single();
+            
+          if (keyData) isValidDbKey = true;
+        }
+
+        if (!isMasterKey && !isValidDbKey) {
+          setMessage('Access Denied: Invalid or Expired Starter Key.');
+          setLoading(false);
+          return;
+        }
+
+        // Proceed with account creation
+        const { data: authData, error: authError } = await supabaseClient.auth.signUp({ email, password });
+        if (authError) throw authError;
+
+        // 3. If a Database Key was used, mark it as spent so it can't be reused
+        if (isValidDbKey && authData.user) {
+          await supabaseClient
+            .from('invite_codes')
+            .update({ is_active: false, used_by: authData.user.id })
+            .eq('code', starterKey);
+        }
+
+        setMessage('Registration successful. You may now log in.');
+        setIsSigningUp(false); // Switch them back to the login view automatically
+        
+      } else {
+        // 4. LOGIN LOGIC
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        
         setMessage('Access granted. Redirecting...');
-        window.location.href = '/chat';
+        
+        // 5. DYNAMIC ROUTING: Send admins to the control plane, users to the chat
+        if (data.user?.user_metadata?.role === 'admin') {
+          router.push('/admin');
+        } else {
+          router.push('/chat');
+        }
       }
+    } catch (err: any) {
+      setMessage(err.message || 'An error occurred during authentication.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -53,11 +95,10 @@ export default function LoginPage() {
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white" required />
           </div>
           
-          {/* Only show the Starter Key field if they are trying to sign up */}
           {isSigningUp && (
             <div>
               <label className="block text-sm font-medium mb-1 text-blue-400">Starter Key (Required for New Users)</label>
-              <input type="password" value={starterKey} onChange={(e) => setStarterKey(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-blue-600 rounded text-white" required />
+              <input type="password" value={starterKey} onChange={(e) => setStarterKey(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-blue-600 rounded text-white focus:ring-2 focus:ring-blue-500 outline-none" required />
             </div>
           )}
           
@@ -66,11 +107,11 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <button onClick={() => setIsSigningUp(!isSigningUp)} className="w-full mt-4 text-sm text-gray-400 hover:text-white transition-colors">
+        <button onClick={() => { setIsSigningUp(!isSigningUp); setMessage(''); }} className="w-full mt-4 text-sm text-gray-400 hover:text-white transition-colors">
           {isSigningUp ? 'Already have an account? Log in' : 'Need an account? Enter Starter Key'}
         </button>
 
-        {message && <p className="mt-4 text-center text-sm text-yellow-400">{message}</p>}
+        {message && <p className={`mt-4 text-center text-sm font-medium ${message.includes('success') || message.includes('granted') ? 'text-green-400' : 'text-yellow-400'}`}>{message}</p>}
       </div>
     </div>
   );
