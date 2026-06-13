@@ -1,14 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import Anthropic from '@anthropic-ai/sdk';
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 
-const region = process.env.AWS_REGION || 'us-east-1';
-
-const anthropic = new Anthropic({
-  apiKey: process.env.BEDROCK_API_KEY, 
-  baseURL: `https://bedrock-mantle.${region}.api.aws/anthropic`,
-  defaultHeaders: {
-    "anthropic-workspace-id": process.env.BEDROCK_WORKSPACE_ID!
-  }
+// Initialize the native AWS client (No more bedrock-mantle proxy)
+const bedrockRuntime = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION || "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  },
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -23,57 +22,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Prompt vector is required' });
     }
 
-    const message = await anthropic.messages.create({
-      model: modelId, 
+    // Format the payload natively for Bedrock's Claude integration
+    const body = JSON.stringify({
+      anthropic_version: "bedrock-2023-05-31",
       max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
     });
+
+    const command = new InvokeModelCommand({
+      // You can now safely pass your native AWS Bedrock strings here
+      // e.g., 'us.anthropic.claude-3-5-sonnet-20241022-v2:0'
+      modelId: modelId, 
+      body: body,
+      contentType: "application/json",
+      accept: "application/json",
+    });
+
+    const response = await bedrockRuntime.send(command);
+    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
 
     return res.status(200).json({
       success: true,
-      text: message.content[0].type === 'text' ? message.content[0].text : 'No text response generated.',
-      usage: message.usage,
+      text: responseBody.content[0].text,
+      usage: responseBody.usage || null,
     });
 
   } catch (error: any) {
-    console.error('Bedrock Execution Error:', error);
+    console.error('Native AWS Bedrock Execution Error:', error);
     
-    // INTERCEPT 404
-    if (error.status === 404 || error.message?.includes('not_found_error')) {
-      try {
-        // Bypass the SDK entirely using native fetch to avoid version mismatch errors
-        const fetchRes = await fetch(`https://bedrock-mantle.${region}.api.aws/anthropic/v1/models`, {
-          method: 'GET',
-          headers: {
-            'x-api-key': process.env.BEDROCK_API_KEY || '',
-            'anthropic-workspace-id': process.env.BEDROCK_WORKSPACE_ID || '',
-            'anthropic-version': '2023-06-01'
-          }
-        });
-        
-        const modelsData = await fetchRes.json();
-        const validIds = modelsData.data?.map((m: any) => m.id) || ['Failed to parse API response'];
-        
-        // This will successfully print the exact model names to your frontend
-        return res.status(404).json({
-          success: false,
-          error: `The string '${modelId}' currently saved in your database is rejected by the Bedrock gateway.`,
-          valid_models_available: validIds,
-          instruction: "Please update your Supabase 'user_model_access' table to exactly match one of the valid strings above."
-        });
-
-      } catch (listError: any) {
-         return res.status(500).json({
-            success: false,
-            error: "Could not fetch the valid models list.",
-            raw_error: error.message
-         });
-      }
-    }
-
     return res.status(500).json({ 
       success: false, 
-      error: error.message || 'Failed to connect to execution layer' 
+      error: error.message || 'Failed to connect to execution layer',
+      attempted_model: modelId
     });
   }
 }
