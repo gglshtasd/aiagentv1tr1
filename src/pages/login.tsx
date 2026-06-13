@@ -24,7 +24,7 @@ export default function LoginPage() {
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(starterKey);
 
         if (!isMasterKey && isUUID) {
-          const { data: keyData } = await supabaseClient.from('invite_codes').select('*').eq('code', starterKey).eq('is_active', true).single();
+          const { data: keyData } = await supabaseClient.from('invite_codes').select('*').eq('code', starterKey).eq('is_active', true).maybeSingle();
           if (keyData) isValidDbKey = true;
         }
 
@@ -37,8 +37,20 @@ export default function LoginPage() {
         const { data: authData, error: authError } = await supabaseClient.auth.signUp({ email, password });
         if (authError) throw authError;
 
-        if (isValidDbKey && authData.user) {
-          await supabaseClient.from('invite_codes').update({ is_active: false, used_by: authData.user.id }).eq('code', starterKey);
+        if (authData.user) {
+          // CRITICAL FIX 1: Explicitly create the user in public.users so database relations work!
+          const { error: insertError } = await supabaseClient.from('users').insert({
+            id: authData.user.id,
+            email: email,
+            role: 'user'
+          });
+          
+          if (insertError) console.error('Failed to create public user record:', insertError);
+
+          // Invalidate the invite code
+          if (isValidDbKey) {
+            await supabaseClient.from('invite_codes').update({ is_active: false }).eq('code', starterKey);
+          }
         }
 
         setMessage('Registration successful. You may now log in.');
@@ -48,17 +60,17 @@ export default function LoginPage() {
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
         
-        setMessage('Access granted. Synchronizing session...');
-        
-        // Ensure middleware can read the cookie
-        if (data.session) {
-          document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=3600; SameSite=Lax`;
-        }
+        setMessage('Access granted. Routing...');
 
-        // CRITICAL FIX: Query the live database to check if you are an admin, ignoring stale local tokens
-        const { data: profile } = await supabaseClient.from('profiles').select('role').eq('id', data.user.id).single();
+        // CRITICAL FIX 2: Query the 'users' table, and use maybeSingle() so it doesn't crash if empty
+        const { data: userRecord } = await supabaseClient
+          .from('users')
+          .select('role')
+          .eq('id', data.user.id)
+          .maybeSingle();
         
-        if (profile?.role === 'admin' || data.user?.user_metadata?.role === 'admin') {
+        // Redirect based on the actual database role
+        if (userRecord?.role === 'admin') {
           window.location.href = '/admin';
         } else {
           window.location.href = '/chat';
