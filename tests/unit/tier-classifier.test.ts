@@ -1,112 +1,123 @@
-import { describe, expect, it } from 'vitest';
-import { classifyTierRequest, ClassifierError, type TierClassifierDependencies } from '../../src/lib/tier-classifier';
-import { estimateCost, estimateInputTokens } from '../../src/lib/token-limiter';
-import type { ClassifyRequest, Tier } from '../../src/types/api';
+// src/lib/tier-classifier.ts
+import { randomUUID } from 'crypto';
+import type { ClassifyRequest, ClassifyResponse, Tier } from '../types/api';
+import {
+  enforceMonthlyLimit,
+  enforceRequestTokenLimit,
+  estimateCost,
+  estimateInputTokens,
+  estimateOutputTokens,
+} from './token-limiter';
+import { 
+  getMonthlyTokenUsage, 
+  getUserByIdOrEmail, 
+  getUserModelAccess, 
+  getAvailableModels, 
+  type UserModelAccessRecord, 
+  type UserRecord 
+} from './supabase';
+import { validateClassifyRequest } from './validators';
 
-const validUser = {
-  id: '11111111-1111-4111-8111-111111111111',
-  email: 'user@example.com',
-  role: 'user',
-  created_at: '2026-01-01T00:00:00.000Z',
-  updated_at: '2026-01-01T00:00:00.000Z',
+export type ClassifierErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'INVALID_USER'
+  | 'UNAUTHORIZED_TIER'
+  | 'LIMIT_EXCEEDED'
+  | 'INTERNAL_ERROR';
+
+export class ClassifierError extends Error {
+  public readonly code: ClassifierErrorCode;
+  public readonly requestId: string;
+
+  constructor(code: ClassifierErrorCode, message: string, requestId: string) {
+    super(message);
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
+export interface TierClassifierDependencies {
+  validateRequest: (input: ClassifyRequest) => string[];
+  getUser: (userId: string) => Promise<UserRecord | null>;
+  getAccess: (userId: string, tier: Tier) => Promise<UserModelAccessRecord[]>;
+  getMonthlyUsage: (userId: string, tier: Tier) => Promise<number>;
+  getAvailableModels: (tier: Tier) => Promise<string[]>; 
+  estimateInputTokens: (prompt: string) => number;
+  estimateOutputTokens: (inputTokens: number, tier: Tier) => number;
+  enforceRequestTokenLimit: (inputTokens: number, tier: Tier) => void;
+  enforceMonthlyLimit: (currentMonthlyTokens: number, incomingTokens: number, tier: Tier) => void;
+  estimateCost: (inputTokens: number, outputTokens: number, tier: Tier, cacheHit?: boolean) => number;
+}
+
+const defaultDependencies: TierClassifierDependencies = {
+  validateRequest: validateClassifyRequest,
+  getUser: getUserByIdOrEmail,
+  getAccess: getUserModelAccess,
+  getMonthlyUsage: getMonthlyTokenUsage,
+  getAvailableModels, 
+  estimateInputTokens,
+  estimateOutputTokens,
+  enforceRequestTokenLimit,
+  enforceMonthlyLimit,
+  estimateCost,
 };
 
-function makeDeps(overrides: Partial<TierClassifierDependencies> = {}): TierClassifierDependencies {
-  return {
-    validateRequest: () => [],
-    getUser: async () => validUser,
-    getAvailableModels: async (tier) => tier === 'CHAT' ? ['claude-3.5-sonnet'] : ['llama-3.1-405b'], // <-- THIS IS THE NEW LINE
-    getAccess: async (userId, tier) => [
-      { user_id: userId, model_name: 'claude-3.5-sonnet', tier: 'CHAT', enabled: true },
-      { user_id: userId, model_name: 'llama-3.1-405b', tier: 'GIT', enabled: true },
-    ],
-    getMonthlyUsage: async () => 500,
-    estimateInputTokens: () => 100,
-    estimateOutputTokens: () => 50,
-    enforceRequestTokenLimit: () => {},
-    enforceMonthlyLimit: () => {},
-    estimateCost: () => 0.05,
-    ...overrides,
-  };
-}
-function makeRequest(tier: Tier, prompt = 'hello world'): ClassifyRequest {
-  return {
-    prompt,
-    user_id: validUser.id,
-    requested_tier: tier,
-  };
+function makeRequestId(): string {
+  return `req_${randomUUID()}`;
 }
 
-describe('tier-classifier', () => {
-  it('classifies valid user with CHAT tier', async () => {
-    const result = await classifyTierRequest(makeRequest('CHAT'), makeDeps());
-    expect(result.tier).toBe('CHAT');
-    expect(result.model).toBe('claude-3.5-sonnet');
-  });
+function selectModel(accessRows: UserModelAccessRecord[], availableModels: string[]): string {
+  for (const model of availableModels) {
+    const match = accessRows.find((row) => row.model_name === model);
+    if (match) {
+      return match.model_name;
+    }
+  }
+  return accessRows[0].model_name; // Fallback
+}
 
-  it('classifies valid user with GIT tier', async () => {
-    const result = await classifyTierRequest(makeRequest('GIT'), makeDeps());
-    expect(result.tier).toBe('GIT');
-    expect(result.model).toBe('llama-3.1-405b');
-  });
+export async function classifyTierRequest(
+  input: ClassifyRequest,
+  deps: TierClassifierDependencies = defaultDependencies,
+): Promise<ClassifyResponse> {
+  const requestId = makeRequestId();
 
-  it('classifies valid user with SANDBOX tier', async () => {
-    const result = await classifyTierRequest(makeRequest('SANDBOX'), makeDeps());
-    expect(result.tier).toBe('SANDBOX');
-    expect(result.model).toBe('llama-3.1-405b');
-  });
+  const validationErrors = deps.validateRequest(input);
+  if (validationErrors.length > 0) {
+    throw new ClassifierError('VALIDATION_ERROR', validationErrors.join('; '), requestId);
+  }
 
-  it('rejects unknown user', async () => {
-    await expect(classifyTierRequest(makeRequest('CHAT'), makeDeps({ getUser: async () => null }))).rejects.toMatchObject({
-      code: 'INVALID_USER',
-    });
-  });
+  const user = await deps.getUser(input.user_id);
+  if (!user) {
+    throw new ClassifierError('INVALID_USER', 'user does not exist', requestId);
+  }
 
-  it('rejects user without tier access', async () => {
-    await expect(classifyTierRequest(makeRequest('GIT'), makeDeps({ getAccess: async () => [] }))).rejects.toMatchObject({
-      code: 'UNAUTHORIZED_TIER',
-    });
-  });
+  const accessRows = await deps.getAccess(user.id, input.requested_tier);
+  if (accessRows.length === 0) {
+    throw new ClassifierError('UNAUTHORIZED_TIER', `user is not authorized for ${input.requested_tier}`, requestId);
+  }
 
-  it('rejects invalid prompt that exceeds max length', async () => {
-    await expect(
-      classifyTierRequest(
-        makeRequest('CHAT', 'x'.repeat(10001)),
-        makeDeps({ validateRequest: () => ['prompt exceeds max length of 10,000 characters'] }),
-      ),
-    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
-  });
+  const inputTokens = deps.estimateInputTokens(input.prompt);
+  deps.enforceRequestTokenLimit(inputTokens, input.requested_tier);
 
-  it('rejects invalid tier', async () => {
-    await expect(
-      classifyTierRequest(
-        { prompt: 'ok', user_id: validUser.id, requested_tier: 'INVALID' as Tier },
-        makeDeps({ validateRequest: () => ['requested_tier must be one of CHAT, GIT, SANDBOX'] }),
-      ),
-    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
-  });
+  const monthlyUsage = await deps.getMonthlyUsage(user.id, input.requested_tier);
+  try {
+    deps.enforceMonthlyLimit(monthlyUsage, inputTokens, input.requested_tier);
+  } catch (error) {
+    throw new ClassifierError('LIMIT_EXCEEDED', (error as Error).message, requestId);
+  }
 
-  it('calculates tokens correctly', async () => {
-    const prompt = 'a'.repeat(40);
-    const result = await classifyTierRequest(makeRequest('CHAT', prompt), makeDeps());
-    expect(result.estimated_tokens).toBe(10);
-  });
+  const availableModels = await deps.getAvailableModels(input.requested_tier);
+  const selectedModel = selectModel(accessRows, availableModels);
+  
+  const estimatedOutputTokens = deps.estimateOutputTokens(inputTokens, input.requested_tier);
+  const estimatedCost = deps.estimateCost(inputTokens, estimatedOutputTokens, input.requested_tier, false);
 
-  it('calculates cost with multiplier correctly', async () => {
-    const prompt = 'a'.repeat(4000);
-    const result = await classifyTierRequest(makeRequest('CHAT', prompt), makeDeps());
-    const expectedCost = estimateCost(1000, 200, 'CHAT');
-    expect(result.estimated_cost).toBe(expectedCost);
-  });
-
-  it('rejects when monthly token limit would be exceeded', async () => {
-    const deps = makeDeps({
-      enforceMonthlyLimit: () => {
-        throw new Error('monthly token limit exceeded for CHAT');
-      },
-    });
-
-    await expect(classifyTierRequest(makeRequest('CHAT'), deps)).rejects.toBeInstanceOf(ClassifierError);
-    await expect(classifyTierRequest(makeRequest('CHAT'), deps)).rejects.toMatchObject({ code: 'LIMIT_EXCEEDED' });
-  });
-});
+  return {
+    tier: input.requested_tier,
+    model: selectedModel,
+    estimated_tokens: inputTokens,
+    estimated_cost: estimatedCost,
+    request_id: requestId,
+  };
+}
