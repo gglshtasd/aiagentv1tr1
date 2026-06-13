@@ -6,9 +6,13 @@ export default function SuperAdminPanel() {
   const [users, setUsers] = useState<any[]>([]);
   const [inviteKeys, setInviteKeys] = useState<any[]>([]);
   
-  // FIX: We added 'KEYS' to the allowed TypeScript union here
   const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS'>('MODELS');
   const [isTesting, setIsTesting] = useState(false);
+
+  // --- NEW STATE FOR ADDING MODELS ---
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelName, setNewModelName] = useState('');
+  const [newModelTier, setNewModelTier] = useState('CHAT');
 
   useEffect(() => {
     fetchData();
@@ -61,6 +65,25 @@ export default function SuperAdminPanel() {
     }
   };
 
+  // --- NEW FUNCTION TO ADD MODELS ---
+  const addModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { error } = await supabaseClient.from('model_registry').insert({
+      model_id: newModelId,
+      friendly_name: newModelName,
+      tier: newModelTier,
+      is_available: false // Defaults to false until audited
+    });
+    
+    if (error) alert('Failed to add model: ' + error.message);
+    else {
+      setNewModelId('');
+      setNewModelName('');
+      setNewModelTier('CHAT');
+      fetchData(); // Refresh the list
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 p-8">
       <div className="max-w-6xl mx-auto">
@@ -81,6 +104,28 @@ export default function SuperAdminPanel() {
                 {isTesting ? 'Running Sweep...' : 'Run Availability Audit'}
               </button>
             </div>
+
+            {/* NEW ADD MODEL FORM */}
+            <form onSubmit={addModel} className="mb-6 p-4 bg-gray-900 rounded border border-gray-700 flex flex-wrap md:flex-nowrap gap-4 items-end">
+              <div className="flex-1 w-full">
+                <label className="block text-xs mb-1 text-gray-400">Model ID</label>
+                <input value={newModelId} onChange={e => setNewModelId(e.target.value)} required className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500" placeholder="e.g. anthropic.claude-3-haiku" />
+              </div>
+              <div className="flex-1 w-full">
+                <label className="block text-xs mb-1 text-gray-400">Friendly Name</label>
+                <input value={newModelName} onChange={e => setNewModelName(e.target.value)} required className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500" placeholder="e.g. Claude 3 Haiku" />
+              </div>
+              <div className="w-full md:w-auto">
+                <label className="block text-xs mb-1 text-gray-400">Target Tier</label>
+                <select value={newModelTier} onChange={e => setNewModelTier(e.target.value)} className="w-full bg-gray-800 p-2 rounded text-sm border border-gray-600 focus:outline-none">
+                  <option value="CHAT">CHAT</option>
+                  <option value="GIT">GIT</option>
+                  <option value="SANDBOX">SANDBOX</option>
+                </select>
+              </div>
+              <button type="submit" className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded text-sm font-bold h-[38px] whitespace-nowrap w-full md:w-auto">Add Model</button>
+            </form>
+
             <div className="space-y-3">
               {models.map(m => (
                 <div key={m.model_id} className="flex justify-between items-center p-3 bg-gray-700/50 rounded">
@@ -106,46 +151,4 @@ export default function SuperAdminPanel() {
                 <div key={u.id} className="flex flex-col md:flex-row justify-between p-4 bg-gray-700/50 rounded gap-4">
                   <div>
                     <div className="font-bold">{u.email} <span className="text-xs bg-gray-600 px-2 py-1 rounded ml-2 uppercase">{u.role}</span></div>
-                    <div className="text-sm mt-1">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_inr}</span></div>
-                  </div>
-                  <div className="flex flex-wrap gap-4 items-center">
-                    <button onClick={() => toggleAdvancedMode(u.id, u.advanced_mode_enabled)} className={`px-3 py-1 rounded text-xs font-bold ${u.advanced_mode_enabled ? 'bg-orange-500 text-white' : 'bg-gray-600 text-gray-300'}`}>
-                      {u.advanced_mode_enabled ? '★ ADVANCED ON' : 'AUTO MODE ONLY'}
-                    </button>
-                    <div className="flex gap-2">
-                      <input type="number" id={`limit-${u.id}`} defaultValue={u.monthly_credit_limit_inr} className="w-24 p-1 bg-gray-900 border border-gray-600 rounded text-center text-sm" />
-                      <button onClick={() => { const val = parseFloat((document.getElementById(`limit-${u.id}`) as HTMLInputElement).value); updateCreditLimit(u.id, val); }} className="bg-blue-600 px-3 py-1 rounded text-xs font-bold">SET LIMIT</button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* KEYS TAB */}
-        {activeTab === 'KEYS' && (
-          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold">Access Invite Keys</h2>
-              <button onClick={generateNewKey} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold">
-                + Generate New Key
-              </button>
-            </div>
-            <div className="space-y-2">
-              {inviteKeys.map(k => (
-                <div key={k.code} className="flex justify-between p-3 bg-gray-900 rounded font-mono text-sm border border-gray-700">
-                  <span className="text-blue-400">{k.code}</span>
-                  <span className={k.is_active ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
-                    {k.is_active ? 'VALID' : 'USED'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-      </div>
-    </div>
-  );
-}
+                    <div className="text-sm mt-1">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_
