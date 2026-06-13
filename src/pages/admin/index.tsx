@@ -151,4 +151,46 @@ export default function SuperAdminPanel() {
                 <div key={u.id} className="flex flex-col md:flex-row justify-between p-4 bg-gray-700/50 rounded gap-4">
                   <div>
                     <div className="font-bold">{u.email} <span className="text-xs bg-gray-600 px-2 py-1 rounded ml-2 uppercase">{u.role}</span></div>
-                    <div className="text-sm mt-1">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_
+                    <div className="text-sm mt-1">Spend: <span className="font-bold text-green-400">₹{u.current_spend_inr} / ₹{u.monthly_credit_limit_inr}</span></div>
+                  </div>
+                  <div className="flex flex-wrap gap-4 items-center">
+                    <button onClick={() => toggleAdvancedMode(u.id, u.advanced_mode_enabled)} className={`px-3 py-1 rounded text-xs font-bold ${u.advanced_mode_enabled ? 'bg-orange-500 text-white' : 'bg-gray-600 text-gray-300'}`}>
+                      {u.advanced_mode_enabled ? '★ ADVANCED ON' : 'AUTO MODE ONLY'}
+                    </button>
+                    <div className="flex gap-2">
+                      <input type="number" id={`limit-${u.id}`} defaultValue={u.monthly_credit_limit_inr} className="w-24 p-1 bg-gray-900 border border-gray-600 rounded text-center text-sm" />
+                      <button onClick={() => { const val = parseFloat((document.getElementById(`limit-${u.id}`) as HTMLInputElement).value); updateCreditLimit(u.id, val); }} className="bg-blue-600 px-3 py-1 rounded text-xs font-bold">SET LIMIT</button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* KEYS TAB */}
+        {activeTab === 'KEYS' && (
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Access Invite Keys</h2>
+              <button onClick={generateNewKey} className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded font-bold">
+                + Generate New Key
+              </button>
+            </div>
+            <div className="space-y-2">
+              {inviteKeys.map(k => (
+                <div key={k.code} className="flex justify-between p-3 bg-gray-900 rounded font-mono text-sm border border-gray-700">
+                  <span className="text-blue-400">{k.code}</span>
+                  <span className={k.is_active ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
+                    {k.is_active ? 'VALID' : 'USED'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
