@@ -1,35 +1,57 @@
-import { AVAILABLE_MODELS } from '../lib/models';
+import { useEffect, useState } from 'react';
+import { supabaseClient } from '../lib/supabase-client';
+
+interface ModelItem {
+  model_id: string;
+  friendly_name: string;
+  tier: string;
+  is_available: boolean;
+}
 
 interface ModelSelectorProps {
   selectedModelId: string;
-  onModelSelect: (modelId: string) => void;
+  onModelSelect: (id: string) => void;
 }
 
 export default function ModelSelector({ selectedModelId, onModelSelect }: ModelSelectorProps) {
+  const [models, setModels] = useState<ModelItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadAvailableModels() {
+      const { data, error } = await supabaseClient
+        .from('model_registry')
+        .select('*')
+        .eq('is_available', true); // Only display verified functional models
+
+      if (!error && data) {
+        setModels(data);
+        // Automatically default to the first functional model if current selection is invalid
+        if (data.length > 0 && !data.find(m => m.model_id === selectedModelId)) {
+          onModelSelect(data[0].model_id);
+        }
+      }
+      setLoading(false);
+    }
+    loadAvailableModels();
+  }, [selectedModelId, onModelSelect]);
+
+  if (loading) return <div className="text-xs text-gray-500">Loading authorized gateways...</div>;
+
   return (
-    <div className="mb-4">
-      <label className="block text-sm font-medium text-gray-700 mb-2">
-        Execution Model
-      </label>
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-2">Active Target Model</label>
       <select
         value={selectedModelId}
         onChange={(e) => onModelSelect(e.target.value)}
-        className="w-full p-2.5 border border-gray-300 bg-white rounded-md shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+        className="w-full p-2 border border-gray-300 rounded-md bg-white text-sm"
       >
-        <option value="" disabled>Select an AI model...</option>
-        {AVAILABLE_MODELS.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.provider} - {model.name}
+        {models.map((model) => (
+          <option key={model.model_id} value={model.model_id}>
+            {model.friendly_name} ({model.tier.toUpperCase()})
           </option>
         ))}
       </select>
-      
-      {/* Dynamic Description Display */}
-      {selectedModelId && (
-        <p className="mt-2 text-xs text-gray-500">
-          {AVAILABLE_MODELS.find(m => m.id === selectedModelId)?.description}
-        </p>
-      )}
     </div>
   );
 }
