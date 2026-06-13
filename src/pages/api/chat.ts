@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const region = process.env.AWS_REGION || 'us-east-1';
 
-// Initialize the native Anthropic SDK through the AWS Bedrock Mantle Gateway
+// The bedrock-mantle gateway acts as a perfect Anthropic API clone.
 const anthropic = new Anthropic({
   apiKey: process.env.BEDROCK_API_KEY, 
   baseURL: `https://bedrock-mantle.${region}.api.aws/anthropic`,
@@ -24,18 +24,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Prompt vector is required' });
     }
 
-    // AWS Documentation Fix: Utilize Cross-Region Inference Profiles
-    // Prepend the geographic routing prefix rather than stripping the ID.
-    let executionModelId = modelId;
-    if (executionModelId === 'anthropic.claude-3-5-sonnet-20241022-v2:0' && region === 'us-east-1') {
-      executionModelId = `us.${executionModelId}`; 
-      // Note: If deploying closer to your location in the future, 
-      // 'apac.anthropic.claude-3-5-sonnet-20241022-v2:0' is the valid profile for Asia Pacific.
-    }
-
-    // Execute the prompt using the exact Bedrock Inference Profile ID
+    // Pass the modelId directly as received from the database. 
+    // Do not mutate it with 'us.' or 'anthropic.' prefixes.
     const message = await anthropic.messages.create({
-      model: executionModelId, 
+      model: modelId, 
       max_tokens: 1024,
       messages: [{ role: 'user', content: prompt }]
     });
@@ -48,6 +40,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error: any) {
     console.error('Bedrock Execution Error:', error);
+    
+    // INTERCEPT 404: If the model doesn't exist, query the gateway for the exact models it DOES support.
+    if (error.status === 404 || error.message?.includes('not_found_error')) {
+      try {
+        const modelsList = await anthropic.models.list();
+        const validIds = modelsList.data.map((m: any) => m.id);
+        
+        return res.status(404).json({
+          success: false,
+          error: `Model ID '${modelId}' is not recognized by this Bedrock workspace.`,
+          valid_models_available: validIds,
+          instruction: "Update your database with one of the valid strings listed above."
+        });
+      } catch (listError) {
+         console.error("Could not fetch models list", listError);
+      }
+    }
+
     return res.status(500).json({ 
       success: false, 
       error: error.message || 'Failed to connect to execution layer' 
