@@ -3,7 +3,6 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const region = process.env.AWS_REGION || 'us-east-1';
 
-// The bedrock-mantle gateway acts as a perfect Anthropic API clone.
 const anthropic = new Anthropic({
   apiKey: process.env.BEDROCK_API_KEY, 
   baseURL: `https://bedrock-mantle.${region}.api.aws/anthropic`,
@@ -17,7 +16,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // FIX: Destructure outside the try-catch block so 'modelId' is globally scoped for this handler
   const { prompt, modelId } = req.body || {};
 
   try {
@@ -40,20 +38,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error: any) {
     console.error('Bedrock Execution Error:', error);
     
-    // modelId is now safely accessible here
+    // INTERCEPT 404
     if (error.status === 404 || error.message?.includes('not_found_error')) {
       try {
-        const modelsList = await anthropic.models.list();
-        const validIds = modelsList.data.map((m: any) => m.id);
+        // Bypass the SDK entirely using native fetch to avoid version mismatch errors
+        const fetchRes = await fetch(`https://bedrock-mantle.${region}.api.aws/anthropic/v1/models`, {
+          method: 'GET',
+          headers: {
+            'x-api-key': process.env.BEDROCK_API_KEY || '',
+            'anthropic-workspace-id': process.env.BEDROCK_WORKSPACE_ID || '',
+            'anthropic-version': '2023-06-01'
+          }
+        });
         
+        const modelsData = await fetchRes.json();
+        const validIds = modelsData.data?.map((m: any) => m.id) || ['Failed to parse API response'];
+        
+        // This will successfully print the exact model names to your frontend
         return res.status(404).json({
           success: false,
-          error: `Model ID '${modelId}' is not recognized by this Bedrock workspace.`,
+          error: `The string '${modelId}' currently saved in your database is rejected by the Bedrock gateway.`,
           valid_models_available: validIds,
-          instruction: "Update your database with one of the valid strings listed above."
+          instruction: "Please update your Supabase 'user_model_access' table to exactly match one of the valid strings above."
         });
-      } catch (listError) {
-         console.error("Could not fetch models list", listError);
+
+      } catch (listError: any) {
+         return res.status(500).json({
+            success: false,
+            error: "Could not fetch the valid models list.",
+            raw_error: error.message
+         });
       }
     }
 
