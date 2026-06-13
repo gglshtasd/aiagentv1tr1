@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!user) throw new Error("Unauthorized");
 
     writeEvent({ type: 'log', message: '> User authorized. Extracting Dev Context...' });
-    const { data: profile } = await supabaseAdmin.from('profiles').select('developer_profile').eq('id', user.id).single();
+    const { data: profile } = await supabaseAdmin.from('users').select('developer_profile').eq('id', user.id).single();
     const memoryContext = profile?.developer_profile ? `\n<developer_context>\n${JSON.stringify(profile.developer_profile)}\n</developer_context>` : '';
 
     // --- MODEL ROUTING ---
