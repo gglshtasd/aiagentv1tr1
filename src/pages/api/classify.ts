@@ -32,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 3. FINANCIAL GUARDRAIL: Check Credit Limit & Mode
     const { data: profile } = await supabaseAdmin
-      .from('profiles')
+      .from('users')
       .select('current_spend_inr, monthly_credit_limit_inr, advanced_mode_enabled')
       .eq('id', user.id)
       .single();
