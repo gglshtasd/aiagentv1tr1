@@ -2,10 +2,8 @@
 
 import { useState } from 'react';
 import { supabaseClient } from '../lib/supabase-client';
-import { useRouter } from 'next/router';
 
 export default function LoginPage() {
-  const router = useRouter(); // 1. Initialize the Next.js router
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [starterKey, setStarterKey] = useState('');
@@ -20,11 +18,10 @@ export default function LoginPage() {
 
     try {
       if (isSigningUp) {
-        // 2. Validate against Master ENV Key OR generated Database Invite Keys
+        // Validation against Master ENV Key OR generated Database Invite Keys
         const isMasterKey = starterKey === process.env.NEXT_PUBLIC_STARTER_KEY;
         let isValidDbKey = false;
         
-        // Only check DB if it's a properly formatted UUID (prevents Supabase type errors)
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(starterKey);
 
         if (!isMasterKey && isUUID) {
@@ -44,11 +41,9 @@ export default function LoginPage() {
           return;
         }
 
-        // Proceed with account creation
         const { data: authData, error: authError } = await supabaseClient.auth.signUp({ email, password });
         if (authError) throw authError;
 
-        // 3. If a Database Key was used, mark it as spent so it can't be reused
         if (isValidDbKey && authData.user) {
           await supabaseClient
             .from('invite_codes')
@@ -57,20 +52,25 @@ export default function LoginPage() {
         }
 
         setMessage('Registration successful. You may now log in.');
-        setIsSigningUp(false); // Switch them back to the login view automatically
+        setIsSigningUp(false); 
         
       } else {
-        // 4. LOGIN LOGIC
+        // --- LOGIN LOGIC ---
         const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
         if (error) throw error;
         
-        setMessage('Access granted. Redirecting...');
+        setMessage('Access granted. Synchronizing secure session...');
         
-        // 5. DYNAMIC ROUTING: Send admins to the control plane, users to the chat
+        // CRITICAL FIX: Manually set the cookie so Next.js Server Middleware can read it!
+        if (data.session) {
+          document.cookie = `sb-access-token=${data.session.access_token}; path=/; max-age=3600; SameSite=Lax`;
+        }
+        
+        // Force a hard navigation so the browser sends the new cookie to the Middleware
         if (data.user?.user_metadata?.role === 'admin') {
-          router.push('/admin');
+          window.location.href = '/admin';
         } else {
-          router.push('/chat');
+          window.location.href = '/chat';
         }
       }
     } catch (err: any) {
