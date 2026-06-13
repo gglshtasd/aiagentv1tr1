@@ -1,108 +1,114 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
-import crypto from 'crypto';
 
 const region = process.env.AWS_REGION || 'us-east-1';
-
-// Initialize Supabase Admin client to bypass RLS for server-side caching
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
-
-  const { prompt, modelId } = req.body;
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!prompt || !modelId || !token) {
-    return res.status(400).json({ error: 'Missing prompt, modelId, or auth token.' });
+  if (req.method !== 'POST') return res.status(405).end();
+  
+  // Accept standard API payload OR OpenAI-compatible payload (for Aider/Cline integration)
+  const isExternalTool = !!req.body.messages;
+  let prompt = '';
+  let requestedModel = req.body.model || 'auto';
+  
+  if (isExternalTool) {
+    // Extract prompt from OpenAI standard messages array
+    prompt = req.body.messages[req.body.messages.length - 1].content;
+  } else {
+    prompt = req.body.prompt;
+    requestedModel = req.body.modelId || 'auto';
   }
 
+  const { history_enabled, file_urls } = req.body;
+  const token = req.headers.authorization?.split(' ')[1];
+
   try {
-    // 1. Authenticate User & Fetch Telemetry Context
-    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
-    if (authError || !user) throw new Error('Unauthorized Access');
+    const { data: { user } } = await supabaseAdmin.auth.getUser(token);
+    if (!user) throw new Error("Unauthorized: Invalid JWT");
 
-    // Fetch the user's silent telemetry profile
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('developer_profile')
-      .eq('id', user.id)
-      .single();
-
-    // 2. TIER 1: Cache Check (Hash the prompt + model)
-    const promptHash = crypto.createHash('sha256').update(`${modelId}:${prompt.trim().toLowerCase()}`).digest('hex');
-    
-    const { data: cachedResult } = await supabaseAdmin
-      .from('query_cache')
-      .select('response_text')
-      .eq('prompt_hash', promptHash)
-      .single();
-
-    if (cachedResult) {
-      console.log('🎯 TIER 1 HIT: Returning cached response (Cost: $0)');
-      return res.status(200).json({
-        success: true,
-        text: cachedResult.response_text,
-        usage: { status: 'cached', cost: '$0.00' }
-      });
-    }
-
-    // 3. Invisible Context Injection
-    const devContext = profile?.developer_profile 
+    // --- PHASE 2: TELEMETRY & MEMORY (Mem0 / Gemma-3-4B-IT logic runs async later) ---
+    const { data: profile } = await supabaseAdmin.from('profiles').select('developer_profile').eq('id', user.id).single();
+    const memoryContext = profile?.developer_profile 
       ? `\n<developer_context>\n${JSON.stringify(profile.developer_profile)}\n</developer_context>` 
       : '';
-    
-    // TIER 3: Context Compressor (Simulated check)
-    // If prompt > 4000 chars, we would route to Haiku here to summarize before sending to Sonnet.
-    let finalPrompt = prompt;
-    if (prompt.length > 4000 && modelId.includes('sonnet')) {
-        console.log('🗜️ TIER 3 TRIGGER: Compressing large prompt context...');
-        // Placeholder: In production, call Haiku here to compress finalPrompt
-        finalPrompt = prompt.substring(0, 4000) + '... [Context Compressed]'; 
+
+    // --- PHASE 2: STRICT MODEL ROUTING MATRIX ---
+    let finalModel = requestedModel;
+    if (requestedModel === 'auto') {
+      // Logic: Route code to Coder, chat to Standard
+      if (prompt.includes('function') || prompt.includes('class ') || prompt.includes('def ')) {
+        finalModel = 'qwen.qwen3-coder-30b-a3b-instruct'; // ADVANCED TIER
+      } else {
+        finalModel = 'qwen.qwen3-32b'; // AUTO TIER
+      }
     }
 
-    // 4. AWS Bedrock Execution (with TIER 2 Prompt Caching compatibility block)
-    const systemInstruction = `You are a helpful AI. Adhere strictly to the user's technical background if provided. ${devContext}`;
+    // --- PHASE 2: PROMPT COMPRESSION (LLMLingua Simulation) ---
+    let finalPrompt = prompt;
+    let inputTokens = Math.ceil(prompt.length / 4);
 
-    const response = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+    // If prompt is large, we use the cheap Gemma-3-12B model to compress it BEFORE hitting Qwen
+    if (inputTokens > 4000) {
+      console.log('Initiating Gemma-3-12B Compression Pipeline...');
+      const compressionRes = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
+        body: JSON.stringify({
+          model: 'google.gemma-3-12b-it', // Strictly adhering to Phase 2 Matrix
+          messages: [{ role: 'user', content: `Summarize the core technical intent and preserve all raw code/logs from this input. Output only the compressed technical data: ${prompt}` }]
+        })
+      });
+      const compressionData = await compressionRes.json();
+      finalPrompt = compressionData.choices?.[0]?.message?.content + "\n\n[Gateway System: Context Compressed by Gemma-3-12B]";
+    }
+
+    // --- PHASE 2: EXECUTION (Qwen / Mistral) ---
+    // Inject custom Fabric-style patterns if needed based on the prompt content
+    let sysPrompt = `You are a highly capable AI assistant. Adhere strictly to the provided developer context. ${memoryContext}`;
+    
+    if (prompt.toLowerCase().includes('review code')) {
+       sysPrompt += "\nAct as a Senior Staff Engineer. Be ruthlessly critical of logic errors, security flaws, and Big-O efficiency.";
+    }
+
+    const bedrockRes = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.BEDROCK_API_KEY || '',
-        'openai-project': process.env.BEDROCK_WORKSPACE_ID || '',
-      },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
       body: JSON.stringify({
-        model: modelId,
+        model: finalModel,
         messages: [
-          { role: 'system', content: systemInstruction }, // Bedrock natively caches system block
+          { role: 'system', content: sysPrompt },
           { role: 'user', content: finalPrompt }
         ],
-        max_tokens: 1024
+        max_tokens: 2048
       })
     });
 
-    if (!response.ok) throw new Error(`Bedrock Gateway Error: ${response.status}`);
+    const responseBody = await bedrockRes.json();
     
-    const responseBody = await response.json();
-    const generatedText = responseBody.choices?.[0]?.message?.content || '';
+    // --- OPENAI COMPATIBILITY CHECK ---
+    // If an external tool like Aider or VSCode Cline called this, return exactly what they expect
+    if (isExternalTool) {
+      return res.status(200).json(responseBody);
+    }
 
-    // 5. Store in Tier 1 Cache for the next user
-    await supabaseAdmin.from('query_cache').upsert({
-      prompt_hash: promptHash,
-      model_id: modelId,
-      response_text: generatedText
-    });
+    // Standard Next.js Frontend Return
+    const aiText = responseBody.choices?.[0]?.message?.content || 'Error generating text.';
 
-    return res.status(200).json({
-      success: true,
-      text: generatedText,
-      usage: responseBody.usage
-    });
+    // Chat History Tracking (Off-the-record respects the history toggle)
+    if (history_enabled) {
+      let convId = req.body.conversation_id;
+      if (!convId) {
+        const { data: newConv } = await supabaseAdmin.from('conversations').insert({ user_id: user.id, title: prompt.substring(0, 30) }).select().single();
+        convId = newConv?.id;
+      }
+      await supabaseAdmin.from('messages').insert({ conversation_id: convId, role: 'user', content: prompt, file_urls: file_urls || [] });
+      await supabaseAdmin.from('messages').insert({ conversation_id: convId, role: 'assistant', content: aiText });
+    }
 
+    return res.status(200).json({ success: true, text: aiText, model_used: finalModel });
   } catch (error: any) {
+    console.error(error);
     return res.status(500).json({ success: false, error: error.message });
   }
 }
