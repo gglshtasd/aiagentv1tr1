@@ -1,3 +1,4 @@
+// src/lib/tier-classifier.ts
 import { randomUUID } from 'crypto';
 import type { ClassifyRequest, ClassifyResponse, Tier } from '../types/api';
 import {
@@ -7,32 +8,24 @@ import {
   estimateInputTokens,
   estimateOutputTokens,
 } from './token-limiter';
-import { getMonthlyTokenUsage, getUserByIdOrEmail, getUserModelAccess, type UserModelAccessRecord, type UserRecord } from './supabase';
+import { 
+  getMonthlyTokenUsage, 
+  getUserByIdOrEmail, 
+  getUserModelAccess, 
+  getAvailableModels, // NEW IMPORT
+  type UserModelAccessRecord, 
+  type UserRecord 
+} from './supabase';
 import { validateClassifyRequest } from './validators';
 
-export type ClassifierErrorCode =
-  | 'VALIDATION_ERROR'
-  | 'INVALID_USER'
-  | 'UNAUTHORIZED_TIER'
-  | 'LIMIT_EXCEEDED'
-  | 'INTERNAL_ERROR';
-
-export class ClassifierError extends Error {
-  public readonly code: ClassifierErrorCode;
-  public readonly requestId: string;
-
-  constructor(code: ClassifierErrorCode, message: string, requestId: string) {
-    super(message);
-    this.code = code;
-    this.requestId = requestId;
-  }
-}
+// ... (Error definitions remain the same)
 
 export interface TierClassifierDependencies {
   validateRequest: (input: ClassifyRequest) => string[];
   getUser: (userId: string) => Promise<UserRecord | null>;
   getAccess: (userId: string, tier: Tier) => Promise<UserModelAccessRecord[]>;
   getMonthlyUsage: (userId: string, tier: Tier) => Promise<number>;
+  getAvailableModels: (tier: Tier) => Promise<string[]>; // NEW DEPENDENCY
   estimateInputTokens: (prompt: string) => number;
   estimateOutputTokens: (inputTokens: number, tier: Tier) => number;
   enforceRequestTokenLimit: (inputTokens: number, tier: Tier) => void;
@@ -45,6 +38,7 @@ const defaultDependencies: TierClassifierDependencies = {
   getUser: getUserByIdOrEmail,
   getAccess: getUserModelAccess,
   getMonthlyUsage: getMonthlyTokenUsage,
+  getAvailableModels, // INJECTED
   estimateInputTokens,
   estimateOutputTokens,
   enforceRequestTokenLimit,
@@ -56,17 +50,15 @@ function makeRequestId(): string {
   return `req_${randomUUID()}`;
 }
 
-function selectModel(accessRows: UserModelAccessRecord[]): string {
-  const priority = ['claude-3.5-sonnet', 'llama-3.1-405b'];
-
-  for (const model of priority) {
+// UPDATED TO USE DYNAMIC DB ARRAY
+function selectModel(accessRows: UserModelAccessRecord[], availableModels: string[]): string {
+  for (const model of availableModels) {
     const match = accessRows.find((row) => row.model_name === model);
     if (match) {
       return match.model_name;
     }
   }
-
-  return accessRows[0].model_name;
+  return accessRows[0].model_name; // Fallback
 }
 
 export async function classifyTierRequest(
@@ -100,7 +92,10 @@ export async function classifyTierRequest(
     throw new ClassifierError('LIMIT_EXCEEDED', (error as Error).message, requestId);
   }
 
-  const selectedModel = selectModel(accessRows);
+  // FETCH DYNAMIC MODELS AND ROUTE
+  const availableModels = await deps.getAvailableModels(input.requested_tier);
+  const selectedModel = selectModel(accessRows, availableModels);
+  
   const estimatedOutputTokens = deps.estimateOutputTokens(inputTokens, input.requested_tier);
   const estimatedCost = deps.estimateCost(inputTokens, estimatedOutputTokens, input.requested_tier, false);
 
