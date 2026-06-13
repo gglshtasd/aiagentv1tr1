@@ -30,13 +30,14 @@ export async function middleware(req: NextRequest) {
   // FAIL-SAFE 3: Strict Admin Route Protection
   if (session && isAdminRoute) {
     // Actually query the DB to verify role, ignoring stale browser cookies
-    const { data: profile, error } = await supabase
-      .from('profiles')
+    // FIX: Using 'users' instead of 'profiles' based on schema.sql
+    const { data: userRecord, error } = await supabase
+      .from('users')
       .select('role')
       .eq('id', session.user.id)
       .single();
 
-    if (error || !profile || profile.role !== 'admin') {
+    if (error || !userRecord || userRecord.role !== 'admin') {
       console.warn(`[MIDDLEWARE] Blocked unauthorized admin access for: ${session.user.email}`);
       
       // Kick back to chat with an error flag so the UI knows what happened
