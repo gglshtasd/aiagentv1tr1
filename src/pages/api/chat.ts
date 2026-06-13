@@ -1,14 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 
-// Initialize the native AWS client (No more bedrock-mantle proxy)
-const bedrockRuntime = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
+const region = process.env.AWS_REGION || 'us-east-1';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -18,42 +10,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { prompt, modelId } = req.body || {};
 
   try {
-    if (!prompt) {
-      return res.status(400).json({ error: 'Prompt vector is required' });
+    if (!prompt || !modelId) {
+      return res.status(400).json({ error: 'Prompt vector and modelId are required.' });
     }
 
-    // Format the payload natively for Bedrock's Claude integration
-    const body = JSON.stringify({
-      anthropic_version: "bedrock-2023-05-31",
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
+    // Universal fetch adapter bypassing SDK strict-typing rules
+    // Formats the request in standard Chat Completions JSON shape
+    const response = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.BEDROCK_API_KEY || '',
+        'anthropic-workspace-id': process.env.BEDROCK_WORKSPACE_ID || '',
+      },
+      body: JSON.stringify({
+        model: modelId, // Safely accepts "openai.gpt-5.4", "nvidia.nemotron...", etc.
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 1024
+      })
     });
 
-    const command = new InvokeModelCommand({
-      // You can now safely pass your native AWS Bedrock strings here
-      // e.g., 'us.anthropic.claude-3-5-sonnet-20241022-v2:0'
-      modelId: modelId, 
-      body: body,
-      contentType: "application/json",
-      accept: "application/json",
-    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error?.message || `Gateway returned HTTP ${response.status}`);
+    }
 
-    const response = await bedrockRuntime.send(command);
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    const responseBody = await response.json();
 
     return res.status(200).json({
       success: true,
-      text: responseBody.content[0].text,
+      // Extracts text from standard OpenAI/Universal proxy response shape
+      text: responseBody.choices?.[0]?.message?.content || 'No text generated.',
       usage: responseBody.usage || null,
     });
 
   } catch (error: any) {
-    console.error('Native AWS Bedrock Execution Error:', error);
+    console.error('Universal Proxy Execution Error:', error);
     
     return res.status(500).json({ 
       success: false, 
