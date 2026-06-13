@@ -20,7 +20,7 @@ export default function SuperAdminPanel() {
 
   const fetchData = async () => {
     const { data: mData } = await supabaseClient.from('model_registry').select('*').order('tier');
-    const { data: uData } = await supabaseClient.from('profiles').select('*');
+    const { data: uData } = await supabaseClient.from('users').select('*');
     const { data: kData } = await supabaseClient.from('invite_codes').select('*').order('created_at', { ascending: false });
     
     if (mData) setModels(mData);
@@ -46,13 +46,13 @@ export default function SuperAdminPanel() {
   };
 
   const updateCreditLimit = async (userId: string, newLimit: number) => {
-    await supabaseClient.from('profiles').update({ monthly_credit_limit_inr: newLimit }).eq('id', userId);
+    await supabaseClient.from('users').update({ monthly_credit_limit_inr: newLimit }).eq('id', userId);
     alert('Limit Updated Successfully');
     fetchData();
   };
 
   const toggleAdvancedMode = async (userId: string, currentStatus: boolean) => {
-    await supabaseClient.from('profiles').update({ advanced_mode_enabled: !currentStatus }).eq('id', userId);
+    await supabaseClient.from('users').update({ advanced_mode_enabled: !currentStatus }).eq('id', userId);
     fetchData();
   };
 
