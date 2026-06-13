@@ -1,4 +1,4 @@
-import { AVAILABLE_MODELS } from '@/lib/models';
+import { AVAILABLE_MODELS } from '../lib/models';
 
 interface ModelSelectorProps {
   selectedModelId: string;
