@@ -1,6 +1,6 @@
+// src/pages/_app.tsx
 import type { AppProps } from 'next/app';
-// This imports your Tailwind CSS globally
-import '../styles/globals.css'; 
+import '../styles/globals.css';
 
 export default function App({ Component, pageProps }: AppProps) {
   return <Component {...pageProps} />;
