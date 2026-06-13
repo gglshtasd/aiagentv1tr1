@@ -1,3 +1,4 @@
+// src/pages/chat.tsx
 import { useState, useRef, useEffect } from 'react';
 import ModelSelector from '../components/ModelSelector';
 import { supabaseClient } from '../lib/supabase-client';
@@ -18,6 +19,19 @@ export default function ChatInterface() {
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [terminalLogs]);
+
+  // ---> NEW HARD LOGOUT FUNCTION <---
+  const handleHardLogout = async () => {
+    // 1. Destroy the Supabase Server Session
+    await supabaseClient.auth.signOut();
+    
+    // 2. Nuke local browser memory caches
+    localStorage.clear();
+    sessionStorage.clear();
+    
+    // 3. Force a hard window redirection to clear Next.js client-side router cache
+    window.location.href = '/login'; 
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,9 +112,17 @@ export default function ChatInterface() {
             ⚙️ Advanced Mode
           </button>
         </div>
-        <button onClick={() => setHistoryEnabled(!historyEnabled)} className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold ${historyEnabled ? 'text-gray-600 bg-gray-100' : 'text-red-500 bg-red-50'}`}>
-          {historyEnabled ? '🕒 History ON' : '🚫 History OFF'}
-        </button>
+        
+        {/* RIGHT SIDE CONTROLS */}
+        <div className="flex gap-2">
+          <button onClick={() => setHistoryEnabled(!historyEnabled)} className={`flex items-center gap-2 px-3 py-1 rounded text-xs font-bold ${historyEnabled ? 'text-gray-600 bg-gray-100' : 'text-red-500 bg-red-50'}`}>
+            {historyEnabled ? '🕒 History ON' : '🚫 History OFF'}
+          </button>
+          {/* ---> NEW LOGOUT BUTTON <--- */}
+          <button onClick={handleHardLogout} className="flex items-center gap-2 px-3 py-1 rounded text-xs font-bold text-red-600 bg-red-100 hover:bg-red-200 transition-colors">
+            ⏏️ Logout
+          </button>
+        </div>
       </div>
 
       {isAdvancedMode && (
