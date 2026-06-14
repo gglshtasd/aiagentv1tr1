@@ -1,3 +1,4 @@
+// src/pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 
@@ -74,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // --- PHASE 2: MEMORY HYDRATION ---
-    // Fixed: Added explicit typing for the message array
+    // RECTIFICATION: Added explicit typing to prevent the 'any[]' build error
     let formattedMessages: { role: string; content: string }[] = [];
     
     if (conversation_id && history_enabled) {
