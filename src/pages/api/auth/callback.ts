@@ -19,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // ==========================================
         // 🔥 THE ULTIMATE ADMIN BYPASS 🔥
         // ==========================================
-        if (user.email === 'gglshtasd@gmail.com') {
+        if (user.email === process.env.MASTER_ADMIN_EMAIL){
           console.log('[AUTH] Master Email detected. Forcing Super Admin privileges...');
           
           // Use the Service Role Key to ruthlessly overwrite the database
