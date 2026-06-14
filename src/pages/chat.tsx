@@ -140,7 +140,8 @@ export default function ChatInterface() {
 
       {/* MAIN VIEW */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-950 relative">
-        {/* HEADER BAR RESTORED */}
+        
+        {/* HEADER BAR (Restores all buttons) */}
         <div className="h-16 flex justify-between items-center bg-gray-900 px-4 border-b border-gray-800 shrink-0">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-800">☰</button>
           
@@ -156,8 +157,8 @@ export default function ChatInterface() {
 
             <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="px-3 py-1.5 rounded text-xs font-bold text-green-400 bg-green-900/30 border border-green-900/50">💻 Logs</button>
             <div className="h-6 w-px bg-gray-700"></div>
-            <span className="text-xs text-gray-400">{userEmail}</span>
-            <button onClick={handleLogout} className="text-xs text-red-400 hover:text-red-300 font-bold">Logout</button>
+            <span className="text-xs text-gray-400 hidden md:block">{userEmail}</span>
+            <button onClick={handleLogout} className="text-xs text-red-400 hover:text-red-300 font-bold px-2">Logout</button>
           </div>
         </div>
 
