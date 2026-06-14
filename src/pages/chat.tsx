@@ -31,7 +31,6 @@ export default function ChatInterface() {
   useEffect(() => {
     supabaseClient.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        // FIXED: Fallback to null if undefined to satisfy TypeScript
         setUserEmail(session.user.email ?? null);
         loadConversations();
       } else {
@@ -110,6 +109,41 @@ export default function ChatInterface() {
     } catch (err) { console.error(err); } finally { setLoading(false); }
   };
 
+  // Phase 4: Handle Tool Approval Execution
+  const handleToolApproval = async () => {
+    setTerminalLogs(prev => [...prev, `> User authorized ${pendingTool?.tool}. Deploying sequence...`]);
+    const currentTool = pendingTool;
+    setPendingTool(null);
+    setIsTerminalOpen(true);
+    
+    try {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const res = await fetch('/api/execute-tool', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+          body: JSON.stringify({
+              tool: currentTool.tool,
+              compressed_prompt: currentTool.compressed_prompt,
+              target_model: currentTool.target_model
+          })
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error);
+
+      setTerminalLogs(prev => [...prev, `> Action successful. Engine Logs: ${data.logs}`]);
+      setTerminalLogs(prev => [...prev, `> Account debited ₹${data.charged_inr.toFixed(2)} (Includes Platform Margin).`]);
+      
+      // Feed the result back into the chat as a system message
+      setChatHistory(prev => [...prev, { role: 'assistant', content: `**Tool Execution Complete:** \n\`\`\`\n${data.logs}\n\`\`\`` }]);
+
+    } catch (err: any) {
+      setTerminalLogs(prev => [...prev, `> [FATAL] Tool execution failed: ${err.message}`]);
+      alert("Tool Execution Failed: " + err.message);
+    }
+  };
+
   return (
     <div className="flex h-screen w-full bg-gray-900 text-gray-100 font-sans overflow-hidden">
       
@@ -120,8 +154,22 @@ export default function ChatInterface() {
             <h3 className="text-xl font-bold text-white mb-2">⚠️ Authorization Required</h3>
             <p className="text-gray-300 text-sm mb-4">Requesting to execute <span className="font-mono text-orange-400">{pendingTool.tool}</span>.</p>
             <div className="flex gap-4">
-              <button onClick={() => setPendingTool(null)} className="flex-1 bg-gray-700 hover:bg-gray-600 py-2 rounded font-bold">Deny</button>
-              <button onClick={() => setPendingTool(null)} className="flex-1 bg-orange-600 hover:bg-orange-500 py-2 rounded font-bold">Approve</button>
+              <button 
+                onClick={() => {
+                  setTerminalLogs(prev => [...prev, `> Authorization denied for ${pendingTool.tool}.`]);
+                  setPendingTool(null);
+                }} 
+                className="flex-1 bg-gray-700 hover:bg-gray-600 py-2 rounded font-bold"
+              >
+                Deny
+              </button>
+              {/* Connected the handleToolApproval to the Approve button */}
+              <button 
+                onClick={handleToolApproval} 
+                className="flex-1 bg-orange-600 hover:bg-orange-500 py-2 rounded font-bold"
+              >
+                Approve
+              </button>
             </div>
           </div>
         </div>
@@ -143,7 +191,7 @@ export default function ChatInterface() {
       {/* MAIN VIEW */}
       <div className="flex-1 flex flex-col min-w-0 bg-gray-950 relative">
         
-        {/* HEADER BAR (Restores all buttons) */}
+        {/* HEADER BAR */}
         <div className="h-16 flex justify-between items-center bg-gray-900 px-4 border-b border-gray-800 shrink-0">
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-800">☰</button>
           
@@ -157,53 +205,4 @@ export default function ChatInterface() {
               <div className="w-48"><ModelSelector selectedModelId={selectedModel} onModelSelect={setSelectedModel} /></div>
             )}
 
-            <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="px-3 py-1.5 rounded text-xs font-bold text-green-400 bg-green-900/30 border border-green-900/50">💻 Logs</button>
-            <div className="h-6 w-px bg-gray-700"></div>
-            <span className="text-xs text-gray-400 hidden md:block">{userEmail}</span>
-            <button onClick={handleLogout} className="text-xs text-red-400 hover:text-red-300 font-bold px-2">Logout</button>
-          </div>
-        </div>
-
-        {/* CHAT DISPLAY */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
-          {chatHistory.map((msg, i) => (
-             <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-               {/* Inside the mapping of chatHistory */}
-               <div className={`p-4 rounded-xl max-w-[85%] leading-relaxed overflow-hidden ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200 border border-gray-700'}`}>
-                 {msg.role === 'user' ? msg.content : <MarkdownRenderer content={msg.content} />}
-               </div>
-             </div>
-          ))}
-          {response && (
-            <div className="flex justify-start">
-               {/* Inside the live response block */}
-               <div className="p-4 rounded-xl max-w-[85%] bg-gray-800 text-gray-200 border border-gray-700 overflow-hidden">
-                 <MarkdownRenderer content={response} />
-               </div>
-            </div>
-          )}
-        </div>
-
-        {/* INPUT FORM */}
-        <form onSubmit={handleSubmit} className="p-4 bg-gray-900 border-t border-gray-800">
-          <div className="max-w-4xl mx-auto relative flex items-center">
-            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Initialize sequence..." className="w-full pl-5 pr-28 py-4 bg-gray-800 border border-gray-700 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none h-[68px]" onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); } }} />
-            <button type="submit" disabled={loading} className="absolute right-2 bg-white text-gray-900 px-5 py-2.5 rounded-lg font-bold">{loading ? '...' : 'Execute'}</button>
-          </div>
-        </form>
-      </div>
-
-      {/* TERMINAL */}
-      <div className={`bg-black flex flex-col border-l border-gray-800 transition-all ${isTerminalOpen ? 'w-80' : 'w-0 hidden'}`}>
-        <div className="p-4 flex justify-between items-center border-b border-gray-800 h-16">
-          <h2 className="font-mono text-xs font-bold text-green-500 tracking-widest uppercase">AWS_Gateway_Logs</h2>
-          <button onClick={() => setIsTerminalOpen(false)} className="text-gray-500 hover:text-white">✕</button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 font-mono text-[11px] text-green-400/90 space-y-1">
-          {terminalLogs.map((log, i) => <div key={i}>{log}</div>)}
-          <div ref={terminalEndRef} />
-        </div>
-      </div>
-    </div>
-  );
-}
+            <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="px-3 py-1.5 rounded text-xs font-bold text-green-400 bg-green-900/30 border border
