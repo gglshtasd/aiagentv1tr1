@@ -17,7 +17,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if ((res as any).flush) (res as any).flush();
   };
 
-  const { prompt, modelId, history_enabled, conversation_id } = req.body;
+  // Extract new advanced parameters and conversation state
+  const { prompt, modelId, history_enabled, conversation_id, temperature, maxTokens } = req.body;
   const token = req.headers.authorization?.split(' ')[1];
 
   try {
@@ -28,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let finalTargetModel = modelId;
     let finalPrompt = prompt;
 
-    // --- PHASE 1: MICRO-ORCHESTRATOR (Only if AUTO mode is selected) ---
+    // --- PHASE 1: MICRO-ORCHESTRATOR ---
     if (modelId === 'auto') {
       writeEvent({ type: 'log', message: '> Booting Micro-Orchestrator (Google Gemma 3 4B)...' });
       
@@ -56,19 +57,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
       });
 
-      if (!gemmaResponse.ok) {
-        const errorText = await gemmaResponse.text();
-        throw new Error(`Orchestrator Error [HTTP ${gemmaResponse.status}]: ${errorText}`);
-      }
+      if (!gemmaResponse.ok) throw new Error(`Orchestrator Error [HTTP ${gemmaResponse.status}]`);
       
       const gemmaData = await gemmaResponse.json();
       const routerDecision = JSON.parse(gemmaData.choices[0].message.content.replace(/```json|```/g, '').trim());
 
-      // STRICT MODEL ID MAPPING (Fixes the 404 Error)
-      finalTargetModel = routerDecision.category === 'CODE' 
-        ? 'qwen.qwen3-coder-30b-a3b-instruct' 
-        : 'qwen.qwen3-32b';
-
+      finalTargetModel = routerDecision.category === 'CODE' ? 'qwen.qwen3-coder-30b-a3b-instruct' : 'qwen.qwen3-32b';
       writeEvent({ type: 'log', message: `> Decision: Category [${routerDecision.category}]. Mapped to ID: [${finalTargetModel}]` });
       
       if (routerDecision.tool_needed !== 'none') {
@@ -78,6 +72,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       finalPrompt = routerDecision.compressed_prompt;
     }
+
+    // --- PHASE 2: MEMORY HYDRATION ---
+    let formattedMessages = [];
+    if (conversation_id && history_enabled) {
+      writeEvent({ type: 'log', message: '> Hydrating context from database memory...' });
+      const { data: pastMessages } = await supabaseAdmin
+        .from('messages')
+        .select('role, content')
+        .eq('conversation_id', conversation_id)
+        .order('created_at', { ascending: true });
+        
+      if (pastMessages) {
+        formattedMessages = pastMessages.map(m => ({ role: m.role, content: m.content }));
+      }
+    }
+    
+    // Append current prompt
+    formattedMessages.push({ role: 'user', content: finalPrompt });
 
     // --- PHASE 3: MAIN EXECUTION ---
     writeEvent({ type: 'log', message: `> Establishing secure execution tunnel to ${finalTargetModel}...` });
@@ -91,16 +103,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       body: JSON.stringify({
         model: finalTargetModel,
-        messages: [{ role: 'user', content: finalPrompt }],
-        max_tokens: 4000,
+        messages: formattedMessages,
+        max_tokens: maxTokens ? Number(maxTokens) : 4000,
+        temperature: temperature !== undefined ? Number(temperature) : 0.7,
         stream: true
       })
     });
 
-    if (!bedrockResponse.ok) {
-      const errorText = await bedrockResponse.text();
-      throw new Error(`Execution Engine Error: ${errorText}`);
-    }
+    if (!bedrockResponse.ok) throw new Error(`Execution Engine Error: ${await bedrockResponse.text()}`);
 
     let fullAiResponse = '';
     const reader = bedrockResponse.body?.getReader();
@@ -141,6 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           { conversation_id: targetConvId, role: 'user', content: prompt },
           { conversation_id: targetConvId, role: 'assistant', content: fullAiResponse }
         ]);
+        writeEvent({ type: 'log', message: `> Memory committed to conversation [${targetConvId}].` });
       }
     }
 
