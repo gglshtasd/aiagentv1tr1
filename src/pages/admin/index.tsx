@@ -22,12 +22,17 @@ export default function SuperAdminPanel() {
     logDevicePresence();
   }, []);
 
-  const logDevicePresence = async () => {
+const logDevicePresence = async () => {
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
+      const payload = await generateTelemetryPayload();
       await fetch('/api/auth/log-device', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}` }
+        headers: { 
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify(payload)
       }).catch(console.error);
     }
   };
