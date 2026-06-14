@@ -1,6 +1,7 @@
-export type Tier = 'CHAT' | 'GIT' | 'SANDBOX';
+// Replace the existing Tier export
+export type Tier = 'CHAT' | 'GIT' | 'SANDBOX' | 'AUTO' | 'ADVANCED' | 'PREMIUM';
 
-export type ExecutionModel = 'claude-3.5-sonnet' | 'llama-3.1-405b' | (string & {});
+export type ExecutionModel = string;
 
 export interface ClassifyRequest {
   prompt: string;
@@ -14,6 +15,7 @@ export interface ClassifyResponse {
   estimated_tokens: number;
   estimated_cost: number;
   request_id: string;
+  tool_routing?: any; // Added for native function calling
 }
 
 export interface APIResponse<T> {
