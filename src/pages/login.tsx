@@ -148,16 +148,3 @@ export default function LoginPage() {
     </div>
   );
 }
-export default function LoginPage() {
-  // Your login component code...
-  return <div>Login Page</div>;
-}
-
-// Add this function to the file to force Vercel to bypass the cache
-export async function getServerSideProps(context) {
-  console.log(">>> [SERVER LOG] Pages Router Login Hit at:", new Date().toISOString());
-  
-  return {
-    props: {}, // passes empty props to the component
-  };
-}
