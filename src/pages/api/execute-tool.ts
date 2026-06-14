@@ -1,13 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 import { CodeBuildClient, StartBuildCommand } from '@aws-sdk/client-codebuild';
+import { executeAgentTool } from '../../lib/lambda-invoker';
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// We will route via US-EAST-1 as standard for AWS CodeBuild
 const codebuild = new CodeBuildClient({ region: process.env.AWS_REGION || 'us-east-1' });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,7 +30,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('service_name', `tool_${tool}`)
       .single();
       
-    // Default to a tiny cost if DB record is missing, with 1.60 (60%) margin
     const baseCost = pricing?.base_cost_usd || 0.01;
     const margin = pricing?.margin_multiplier || 1.60;
 
@@ -38,10 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // TOOL ROUTER
     // ==========================================
     if (tool === 'codebuild') {
-      // PHASE 4: AWS CODEBUILD (Replacing E2E)
-      // This sends the AI's instruction directly into a secure AWS Ubuntu container
       const startCommand = new StartBuildCommand({
-        projectName: 'AI_Agent_Sandbox', // You must create a blank project in AWS CodeBuild named this
+        projectName: 'AI_Agent_Sandbox', 
         environmentVariablesOverride: [
           { name: 'AI_INSTRUCTION', value: compressed_prompt, type: 'PLAINTEXT' }
         ]
@@ -49,14 +46,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       
       await codebuild.send(startCommand);
       executionLogs = `AWS CodeBuild instance spun up successfully.\nExecuting container task for prompt: "${compressed_prompt.substring(0, 50)}..."`;
-      
-      // Calculate Cost: 1 min of compute * Margin
       finalCostUsd = baseCost * margin;
 
     } else if (tool === 'github_actions') {
-      // PHASE 4: GITHUB ACTIONS
-      // Triggers a repository dispatch event using your PAT
-      const ghRes = await fetch('https://api.github.com/repos/YOUR_GITHUB_NAME/YOUR_REPO/dispatches', {
+      const ghRes = await fetch(`https://api.github.com/repos/${process.env.GITHUB_WORKFLOW_REPO || 'owner/repo'}/dispatches`, {
         method: 'POST',
         headers: {
           'Accept': 'application/vnd.github.v3+json',
@@ -69,15 +62,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       executionLogs = `GitHub Action Dispatch successful. Runner is picking up the job.`;
       finalCostUsd = baseCost * margin;
 
+    } else if (tool === 'lambda') {
+      // BUG FIX: Added Missing Lambda Execution Logic
+      const lambdaRes = await executeAgentTool('analyze', { instruction: compressed_prompt });
+      executionLogs = `AWS Lambda Execution successful.\nResult: ${JSON.stringify(lambdaRes)}`;
+      finalCostUsd = baseCost * margin;
+
     } else {
       throw new Error(`Tool [${tool}] is not recognized by the Gateway.`);
     }
 
     // ==========================================
-    // LEDGER COMMIT (The 60% Margin Charge)
+    // LEDGER COMMIT (The Margin Charge)
     // ==========================================
-    // Convert USD to INR for your ledger (assuming 1 USD = ~83 INR)
-    const finalCostInr = finalCostUsd * 83;
+    const finalCostInr = finalCostUsd * 83; // USD to INR conversion
 
     await supabaseAdmin.from('billing_ledger').insert({
       user_id: user.id,
