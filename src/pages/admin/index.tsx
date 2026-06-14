@@ -9,7 +9,10 @@ export default function SuperAdminPanel() {
   const [logs, setLogs] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[] | null>(null); // Added for Audit Output
   
-  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY' | 'SYSTEM'>('MODELS');
+  // 1. Updated activeTab state and added pricingConfigs
+  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY' | 'SYSTEM' | 'ECONOMICS'>('MODELS');
+  const [pricingConfigs, setPricingConfigs] = useState<any[]>([]);
+  
   const [isTesting, setIsTesting] = useState(false);
 
   // --- MODEL STATE ---
@@ -26,6 +29,7 @@ export default function SuperAdminPanel() {
 
   useEffect(() => {
     fetchData();
+    loadPricing(); // 2. Call loadPricing alongside fetchData
     logDevicePresence();
   }, []);
 
@@ -54,6 +58,16 @@ export default function SuperAdminPanel() {
     if (uData) setUsers(uData);
     if (kData) setInviteKeys(kData);
     if (lData) setLogs(lData);
+  };
+
+  // 2. Added loadPricing function
+  const loadPricing = async () => {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    const res = await fetch('/api/admin/pricing', {
+      headers: { 'Authorization': `Bearer ${session?.access_token}` }
+    });
+    const json = await res.json();
+    if (json.success) setPricingConfigs(json.data);
   };
 
   // --- SYSTEM TEST FUNCTIONS ---
@@ -143,6 +157,8 @@ export default function SuperAdminPanel() {
           <button onClick={() => setActiveTab('KEYS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'KEYS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Invite Keys</button>
           <button onClick={() => setActiveTab('ACTIVITY')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'ACTIVITY' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Telemetry</button>
           <button onClick={() => setActiveTab('SYSTEM')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'SYSTEM' ? 'bg-orange-600 text-white' : 'bg-gray-800 hover:bg-gray-700'}`}>System Tests</button>
+          {/* 3. Added Economics Tab */}
+          <button onClick={() => { setActiveTab('ECONOMICS'); loadPricing(); }} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'ECONOMICS' ? 'bg-green-600 text-white' : 'bg-gray-800 hover:bg-gray-700'}`}>Economics & Margins</button>
         </div>
 
         {/* 1. MODELS TAB */}
@@ -360,6 +376,57 @@ export default function SuperAdminPanel() {
             </div>
           </div>
         )}
+
+        {/* 6. ECONOMICS TAB */}
+        {activeTab === 'ECONOMICS' && (
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
+            <h2 className="text-xl font-bold mb-6">Execution Profit Margins</h2>
+            <div className="space-y-4">
+              {pricingConfigs.map(config => (
+                <div key={config.id} className="flex flex-col md:flex-row justify-between p-4 bg-gray-700/50 rounded items-center gap-4 border border-gray-600">
+                  <div>
+                    <div className="font-bold text-lg text-white">{config.service_name.replace('tool_', '').toUpperCase()}</div>
+                    <div className="text-xs text-gray-400">Base AWS Cost: ${config.base_cost_usd.toFixed(4)}</div>
+                  </div>
+                  <div className="flex gap-4 items-center">
+                    <div className="flex flex-col">
+                      <label className="text-[10px] text-gray-400 uppercase tracking-wide">Margin Multiplier</label>
+                      <input 
+                        type="number" step="0.1" 
+                        id={`margin-${config.id}`} 
+                        defaultValue={config.margin_multiplier} 
+                        className="w-24 p-2 bg-gray-900 border border-gray-600 rounded text-center focus:border-green-500 focus:outline-none" 
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <label className="text-[10px] text-gray-400 uppercase tracking-wide">Final Cost (USD)</label>
+                      <div className="w-24 p-2 bg-transparent text-center font-mono text-green-400">
+                        ${(config.base_cost_usd * config.margin_multiplier).toFixed(4)}
+                      </div>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        const newMargin = parseFloat((document.getElementById(`margin-${config.id}`) as HTMLInputElement).value);
+                        const { data: { session } } = await supabaseClient.auth.getSession();
+                        await fetch('/api/admin/pricing', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+                          body: JSON.stringify({ id: config.id, margin_multiplier: newMargin, base_cost_usd: config.base_cost_usd })
+                        });
+                        loadPricing();
+                        alert('Margin Updated Successfully');
+                      }} 
+                      className="bg-green-700 hover:bg-green-600 px-4 py-2 rounded font-bold h-[42px] mt-4"
+                    >
+                      SAVE
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
