@@ -23,10 +23,10 @@ export async function middleware(req: NextRequest) {
   }
 
   if (session && isAdminRoute) {
-    // 🔥 THE MASTER BYPASS: Hardcode your email to permanently bypass DB role checks
-    if (session.user.email === 'gglshtasd@gmail.com') {
-      return res; // Instantly grant access to the Admin panel
-    }
+  // Pull from secure environment variables
+  if (session.user.email === process.env.MASTER_ADMIN_EMAIL) {
+    return res; 
+  }
 
     // Standard routing for everyone else
     const { data: userRecord, error } = await supabase
