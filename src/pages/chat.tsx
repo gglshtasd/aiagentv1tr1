@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseClient } from '../lib/supabase-client';
 import ModelSelector from '../components/ModelSelector';
+import { Paperclip, Loader2 } from 'lucide-react';
 
 export default function ChatInterface() {
   const router = useRouter();
@@ -232,11 +233,53 @@ export default function ChatInterface() {
           )}
           {loading && !response && <div className="text-gray-500 animate-pulse text-center">Processing...</div>}
         </div>
-
-        {/* INPUT BOX */}
+{/* INPUT BOX WITH FILE ATTACHMENT */}
         <div className="p-4 bg-gray-900 border-t border-gray-800">
-          <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-2">
-            <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} className="flex-1 bg-gray-800 p-3 rounded-lg border border-gray-700 text-white focus:outline-none focus:border-blue-500" placeholder="Enter directive..." disabled={loading} />
+          <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-2 items-center">
+            
+            {/* Hidden File Input & Trigger */}
+            <input 
+              type="file" 
+              id="file-upload" 
+              className="hidden" 
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setLoading(true);
+                try {
+                  const { data: { session } } = await supabaseClient.auth.getSession();
+                  
+                  // 1. Get Presigned URL
+                  const urlRes = await fetch('/api/storage/get-upload-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+                    body: JSON.stringify({ fileName: file.name, fileType: file.type })
+                  });
+                  const urlData = await urlRes.json();
+                  if (!urlData.success) throw new Error(urlData.error);
+
+                  // 2. Upload to S3 Zero-Egress Shield
+                  await fetch(urlData.data.uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': file.type },
+                    body: file
+                  });
+
+                  // 3. Append to Prompt
+                  setPrompt(prev => prev + `\n[Attached File Context: ${urlData.data.publicUrl}]\n`);
+                } catch (err) {
+                  alert("File upload failed.");
+                } finally {
+                  setLoading(false);
+                }
+              }}
+            />
+            <label htmlFor="file-upload" className={`p-3 bg-gray-800 rounded-lg border border-gray-700 cursor-pointer hover:bg-gray-700 transition-colors ${loading ? 'opacity-50 pointer-events-none' : ''}`}>
+               {loading ? <Loader2 size={20} className="text-gray-400 animate-spin" /> : <Paperclip size={20} className="text-gray-400" />}
+            </label>
+
+            {/* Existing Text Input */}
+            <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} className="flex-1 bg-gray-800 p-3 rounded-lg border border-gray-700 text-white focus:outline-none focus:border-blue-500" placeholder="Enter directive or attach file..." disabled={loading} />
             <button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded-lg font-bold transition-colors">Send</button>
           </form>
         </div>
