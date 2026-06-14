@@ -1,4 +1,4 @@
-// Replace the existing Tier export
+// Replaces the old Tier type to match our new Supabase Registry
 export type Tier = 'CHAT' | 'GIT' | 'SANDBOX' | 'AUTO' | 'ADVANCED' | 'PREMIUM';
 
 export type ExecutionModel = string;
@@ -15,7 +15,7 @@ export interface ClassifyResponse {
   estimated_tokens: number;
   estimated_cost: number;
   request_id: string;
-  tool_routing?: any; // Added for native function calling
+  tool_routing?: any; // Added to support our future JSON Router Agent
 }
 
 export interface APIResponse<T> {
