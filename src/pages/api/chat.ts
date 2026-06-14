@@ -31,18 +31,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // --- PHASE 1: MICRO-ORCHESTRATOR ---
     if (modelId === 'auto') {
-      const gemmaResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
-        body: JSON.stringify({ model: 'google.gemma-3-4b-it', messages: [{ role: 'user', content: `Analyze intent. JSON { "category": "CODE|TEXT", "tool_needed": "none" }. Prompt: ${prompt}` }], temperature: 0.1 })
-      });
-      const gemmaData = await gemmaResponse.json();
-      const decision = JSON.parse(gemmaData.choices[0].message.content.replace(/```json|```/g, '').trim());
-      
-      finalTargetModel = decision.category === 'CODE' ? 'qwen.qwen3-coder-30b-a3b-instruct' : 'mistral.ministral-3-8b-instruct';
-      writeEvent({ type: 'log', message: `> Auto-Routed to: [${finalTargetModel}]` });
+      try {
+        const gemmaResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
+          body: JSON.stringify({ 
+            model: 'google.gemma-3-4b-it', 
+            messages: [{ role: 'user', content: `Classify this prompt as either strictly 'CODE' or strictly 'TEXT'. Output exactly one word. Prompt: ${prompt}` }], 
+            temperature: 0.1 
+          })
+        });
+        
+        const gemmaData = await gemmaResponse.json();
+        const rawContent = (gemmaData.choices?.[0]?.message?.content || '').toUpperCase();
+        
+        // BULLETPROOF STRING MATCHING: No JSON parsing to fail!
+        finalTargetModel = rawContent.includes('CODE') ? 'qwen.qwen3-coder-30b-a3b-instruct' : 'mistral.ministral-3-8b-instruct';
+        
+        writeEvent({ type: 'log', message: `> Auto-Routed to: [${finalTargetModel}]` });
+      } catch (err) {
+        // Ultimate fallback: If AWS hiccups, it defaults to Text mode without crashing the app.
+        finalTargetModel = 'mistral.ministral-3-8b-instruct';
+        writeEvent({ type: 'log', message: `> Auto-Route Defaulted to: [${finalTargetModel}]` });
+      }
     }
-
     // --- PHASE 4: TIER & BILLING GATEWAY ---
     const authCheck = await authorizeCompute(user.id, finalTargetModel);
     if (!authCheck.authorized) {
