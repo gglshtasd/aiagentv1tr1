@@ -1,0 +1,43 @@
+version: 0.2
+
+env:
+  variables:
+    PYTHON_VERSION: "3.11"
+    NODE_VERSION: "20"
+  secrets-manager:
+    GITHUB_PAT: "prod/git/pat:token"
+    LITELLM_API_KEY: "prod/ai/litellm:key"
+
+phases:
+  install:
+    runtime-versions:
+      python: ${PYTHON_VERSION}
+      nodejs: ${NODE_VERSION}
+    commands:
+      - echo "[SYSTEM] Initializing Architect Mode Container..."
+      - pip install crewai autogenstudio litellm
+      - npm install -g pnpm
+  
+  pre_build:
+    commands:
+      - echo "[GIT] Cloning Target Repository..."
+      - git clone https://${GITHUB_PAT}@github.com/${TARGET_REPO}.git target_workspace
+      - cd target_workspace
+      - git checkout -b ai-architect-${CODEBUILD_BUILD_NUMBER}
+      
+  build:
+    commands:
+      - echo "[AGENT] Initializing CrewAI / AutoGen Framework..."
+      # Target script is dynamically injected by Vercel upon request
+      - echo "$DYNAMIC_AGENT_SCRIPT" > architect.py
+      - python architect.py
+      
+  post_build:
+    commands:
+      - echo "[GIT] Pushing Architectural Changes..."
+      - git config --global user.email "architect@aiagentv1tr1.internal"
+      - git config --global user.name "Master Orchestrator"
+      - git add .
+      - git commit -m "feat(ai): CodeBuild Automated Architect Execution" || echo "No changes to commit"
+      - git push origin ai-architect-${CODEBUILD_BUILD_NUMBER}
+      - echo "[SYSTEM] Container execution complete. Terminating."
