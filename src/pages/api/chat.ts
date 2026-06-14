@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
-import { authorizeCompute, logSystemEvent } from '../../lib/orchestrator';
+import { orchestrateRequest, logSystemEvent } from '../../lib/orchestrator';
 
 const region = process.env.AWS_REGION || 'us-east-1';
 const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
@@ -8,116 +8,78 @@ const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, proces
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
   const writeEvent = (data: any) => { res.write(`data: ${JSON.stringify(data)}\n\n`); if ((res as any).flush) (res as any).flush(); };
 
-  // Added `incognito` boolean
-  const { prompt, modelId, history_enabled, conversation_id, temperature, maxTokens, incognito } = req.body;
+  const { prompt, mode = 'budget', conversation_id, incognito } = req.body;
   const token = req.headers.authorization?.split(' ')[1];
 
   try {
-    writeEvent({ type: 'log', message: '> Validating secure JWT & Access Tiers...' });
+    writeEvent({ type: 'log', message: `> [AUTH] Validating secure JWT for mode: ${mode}...` });
     const { data: { user } } = await supabaseAdmin.auth.getUser(token);
     if (!user) throw new Error("Unauthorized Access");
 
-    if (incognito) writeEvent({ type: 'log', message: '> 🕶️ INCOGNITO MODE ACTIVE. Database telemetry suspended.' });
+    if (incognito) writeEvent({ type: 'log', message: '> [SYSTEM] 🕶️ INCOGNITO ACTIVE. Database writes suspended.' });
 
-    let finalTargetModel = modelId;
-    let finalPrompt = prompt;
-
-    // --- PHASE 1: MICRO-ORCHESTRATOR ---
-    if (modelId === 'auto') {
-      try {
-        const gemmaResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
-          body: JSON.stringify({ 
-            model: 'google.gemma-3-4b-it', 
-            messages: [{ role: 'user', content: `Classify this prompt as either strictly 'CODE' or strictly 'TEXT'. Output exactly one word. Prompt: ${prompt}` }], 
-            temperature: 0.1 
-          })
-        });
-        
-        const gemmaData = await gemmaResponse.json();
-        const rawContent = (gemmaData.choices?.[0]?.message?.content || '').toUpperCase();
-        
-        // BULLETPROOF STRING MATCHING: No JSON parsing to fail!
-        finalTargetModel = rawContent.includes('CODE') ? 'qwen.qwen3-coder-30b-a3b-instruct' : 'mistral.ministral-3-8b-instruct';
-        
-        writeEvent({ type: 'log', message: `> Auto-Routed to: [${finalTargetModel}]` });
-      } catch (err) {
-        // Ultimate fallback: If AWS hiccups, it defaults to Text mode without crashing the app.
-        finalTargetModel = 'mistral.ministral-3-8b-instruct';
-        writeEvent({ type: 'log', message: `> Auto-Route Defaulted to: [${finalTargetModel}]` });
-      }
-    }
-    // --- PHASE 4: TIER & BILLING GATEWAY ---
-    const authCheck = await authorizeCompute(user.id, finalTargetModel);
-    if (!authCheck.authorized) {
-      await logSystemEvent('warn', 'orchestrator', `Compute Denied for ${user.id}: ${authCheck.error}`);
-      throw new Error(authCheck.error);
-    }
-    writeEvent({ type: 'log', message: '> Compute authorized. Ledger validated.' });
-
-    // --- PHASE 3: MEMORY & SUMMARY BUFFER ---
-    let formattedMessages: { role: string; content: string }[] = [];
-    if (conversation_id && history_enabled && !incognito) {
-      const { data: pastMessages } = await supabaseAdmin.from('messages').select('role, content').eq('conversation_id', conversation_id).order('created_at', { ascending: true });
-      
-      if (pastMessages && pastMessages.length > 5) {
-        writeEvent({ type: 'log', message: '> Memory exceeds 5 turns. Triggering Azure/Gemma context compression...' });
-        // Send to cheap model to summarize everything except the last 2 turns
-        const msgsToCompress = pastMessages.slice(0, pastMessages.length - 2);
-        const retainedMsgs = pastMessages.slice(pastMessages.length - 2);
-        
-        // (In a full implementation, you fetch Bedrock here to summarize msgsToCompress)
-        // For now, we simulate the compression logic dropping old context safely
-        formattedMessages = [{ role: 'system', content: `[SYSTEM: Previous turns summarized/archived]`} , ...retainedMsgs.map(m => ({ role: m.role, content: m.content }))];
-      } else if (pastMessages) {
-        formattedMessages = pastMessages.map(m => ({ role: m.role, content: m.content }));
-      }
-    }
+    // Execute Orchestrator Logic
+    const route = await orchestrateRequest(user.id, prompt, mode, incognito);
+    if (!route.success || !route.payload) throw new Error("Orchestrator routing failed.");
     
-    // --- PHASE 5: SHADOW PROFILE INJECTION ---
-    if (!incognito && process.env.AZURE_VM_ENDPOINT) {
-      try {
-        writeEvent({ type: 'log', message: '> Fetching User Shadow Profile from Azure...' });
-        const profileRes = await fetch(`${process.env.AZURE_VM_ENDPOINT}/api/profile/${user.id}`, {
-          headers: { 'Authorization': `Bearer ${process.env.AZURE_VM_SECRET}` }
-        });
-        
-        if (profileRes.ok) {
-          const profileText = await profileRes.text();
-          if (profileText) {
-            formattedMessages.unshift({ 
-              role: 'system', 
-              content: `[SYSTEM: USER SHADOW PROFILE]\nAdapt your response based on these known user traits:\n${profileText}` 
-            });
-            writeEvent({ type: 'log', message: '> Shadow Profile injected into execution context.' });
-          }
-        }
-      } catch (err) {
-        // Fail gracefully without crashing the chat if Azure is briefly unreachable
-        writeEvent({ type: 'log', message: '> Shadow Profile bypass (Network Timeout).' });
+    writeEvent({ type: 'log', message: `> [ROUTER] Assigned Workflow: ${route.payload.workflow}` });
+    writeEvent({ type: 'log', message: `> [ROUTER] Target Compute: [${route.payload.model}]` });
+
+    let formattedMessages = [];
+    
+    // Memory Injection
+    if (conversation_id && !incognito) {
+      const { data: pastMessages } = await supabaseAdmin.from('messages').select('role, content').eq('conversation_id', conversation_id).order('created_at', { ascending: true });
+      if (pastMessages) {
+        formattedMessages = pastMessages.map((m: any) => ({ role: m.role, content: m.content }));
+        writeEvent({ type: 'log', message: `> [MEMORY] Restored ${formattedMessages.length} past turns.` });
       }
     }
 
-    // Push the final user prompt *after* the profile and memory have been loaded
-    formattedMessages.push({ role: 'user', content: finalPrompt });
+    if (route.payload.injectedContext) {
+       formattedMessages.unshift({ role: 'system', content: `[SHADOW PROFILE]: ${route.payload.injectedContext}` });
+       writeEvent({ type: 'log', message: `> [AGENT] Shadow profile loaded into system prompt.` });
+    }
 
-    // --- EXECUTION ---
-    writeEvent({ type: 'log', message: `> Establishing secure execution tunnel...` });
-    const bedrockResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+    formattedMessages.push({ role: 'user', content: prompt });
+
+    // Execute Inference
+    const baseUrl = process.env.LITELLM_PROXY_URL || `https://bedrock-mantle.${region}.api.aws/v1/chat/completions`;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    
+    if (process.env.LITELLM_PROXY_URL) {
+      headers['Authorization'] = `Bearer ${process.env.LITELLM_API_KEY || ''}`;
+    } else {
+      headers['x-api-key'] = process.env.BEDROCK_API_KEY || '';
+      headers['openai-project'] = process.env.BEDROCK_WORKSPACE_ID || '';
+    }
+
+    writeEvent({ type: 'log', message: `> [NETWORK] Opening secure inference tunnel...` });
+    
+    let bedrockResponse = await fetch(baseUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.BEDROCK_API_KEY!, 'openai-project': process.env.BEDROCK_WORKSPACE_ID! },
-      body: JSON.stringify({ model: finalTargetModel, messages: formattedMessages, max_tokens: maxTokens || 4000, temperature: temperature || 0.7, stream: true })
+      headers,
+      body: JSON.stringify({ model: route.payload.model, messages: formattedMessages, stream: true })
     });
 
-    if (!bedrockResponse.ok) throw new Error(`Engine Error: ${bedrockResponse.statusText}`);
+    if (!bedrockResponse.ok) {
+        writeEvent({ type: 'log', message: `> [WARN] ${route.payload.model} failed. Auto-Fallback initiated...` });
+        bedrockResponse = await fetch(baseUrl, {
+           method: 'POST',
+           headers,
+           body: JSON.stringify({ model: 'mistral.ministral-3-8b-instruct', messages: formattedMessages, stream: true })
+        });
+        if (!bedrockResponse.ok) throw new Error(`Engine Error: ${bedrockResponse.statusText}`);
+    }
 
     let fullAiResponse = '';
     const reader = bedrockResponse.body?.getReader();
@@ -128,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
+        const lines = chunk.split('\n').filter((l: string) => l.startsWith('data: '));
         for (const line of lines) {
           const dataStr = line.replace('data: ', '').trim();
           if (dataStr === '[DONE]') break;
@@ -141,8 +103,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // --- LEDGER & HISTORY ---
-    if (history_enabled && !incognito) {
+    // Ledger Update
+    if (!incognito) {
       let targetConvId = conversation_id;
       if (!targetConvId) {
         const { data: newConv } = await supabaseAdmin.from('conversations').insert({ user_id: user.id, title: prompt.substring(0, 40) }).select().single();
@@ -157,14 +119,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    if(!incognito) logSystemEvent('info', 'edge_routing', `Successful inference cycle completed on ${finalTargetModel}.`);
-    writeEvent({ type: 'log', message: '> Workflow completed successfully.' });
+    writeEvent({ type: 'log', message: '> [SYSTEM] Workflow completed successfully.' });
     writeEvent({ type: 'done' });
     res.end();
 
   } catch (error: any) {
-    if(!incognito) logSystemEvent('error', 'edge_routing', error.message);
-    writeEvent({ type: 'log', message: `> [FATAL ERROR] ${error.message}` });
+    if(!incognito) await logSystemEvent('error', 'edge_routing', error.message);
+    writeEvent({ type: 'log', message: `> [FATAL] ${error.message}` });
     writeEvent({ type: 'error', message: error.message });
     res.end();
   }
