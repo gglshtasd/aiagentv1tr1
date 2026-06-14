@@ -1,70 +1,88 @@
+import { authorizeCompute } from './billing'; // Assuming billing.ts is in the same dir
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseAdmin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+// Setup internal Admin client for secure routing decisions
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  { global: { fetch: (url, options) => fetch(url, { ...options, cache: 'no-store' }) } }
+);
 
-const TIER_MAPPING: Record<string, number> = {
-  'CHAT': 1,
-  'AUTO': 2,
-  'ADVANCED': 3,
-  'PREMIUM': 4,
-  'SANDBOX': 5, // AWS Lambda / Tools
-  'GIT': 6      // CodeBuild / Heavy Repos
-};
-
-export async function authorizeCompute(userId: string, targetModelId: string) {
+export async function orchestrateRequest(
+  userId: string, 
+  prompt: string, 
+  tier: number,
+  isIncognito: boolean = false
+) {
   try {
-    // 1. Fetch User Finances
-    const { data: user, error: userErr } = await supabaseAdmin
-      .from('users')
-      .select('current_spend_inr, monthly_credit_limit_inr')
-      .eq('id', userId)
-      .single();
-      
-    if (userErr || !user) throw new Error("Failed to authenticate user profile.");
-    if (user.current_spend_inr >= user.monthly_credit_limit_inr) {
-      throw new Error(`INSUFFICIENT_FUNDS: Monthly limit of ₹${user.monthly_credit_limit_inr} reached.`);
+    // 1. Enterprise Billing Gate
+    // Requires a minimum of ₹0.50 available to initiate any compute
+    const { authorized, reason } = await authorizeCompute(userId, 0.50); 
+    if (!authorized) {
+       throw new Error(`[BILLING GATE] ${reason}`);
     }
 
-    // 2. Fetch Model Tier & Pricing
-    const { data: model, error: modelErr } = await supabaseAdmin
-      .from('model_registry')
-      .select('tier, input_cost_per_1k, output_cost_per_1k, is_available')
-      .eq('model_id', targetModelId)
-      .single();
-
-    if (modelErr || !model) throw new Error(`MODEL_NOT_FOUND: ${targetModelId} is not in the registry.`);
-    if (!model.is_available) throw new Error(`OFFLINE: ${targetModelId} is currently unavailable.`);
-
-    // 3. Verify Tier Access (Tiers 1-6)
-    const requiredTierLevel = TIER_MAPPING[model.tier.toUpperCase()] || 1;
-    const { data: perm } = await supabaseAdmin
-      .from('user_tier_permissions')
-      .select('is_enabled')
-      .eq('user_id', userId)
-      .eq('tier_level', requiredTierLevel)
-      .single();
-
-    if (!perm || !perm.is_enabled) {
-      throw new Error(`TIER_LOCK: You do not have access to Tier ${requiredTierLevel} (${model.tier}) models.`);
+    // 2. Profile Extraction (For Tier 3 Personal Workspace)
+    let userProfile = "";
+    if (tier === 3 && !isIncognito) {
+       const { data: profileData } = await supabaseAdmin
+         .from('users')
+         .select('developer_profile')
+         .eq('id', userId)
+         .single();
+       userProfile = profileData?.developer_profile ? JSON.stringify(profileData.developer_profile) : "";
     }
 
-    return { authorized: true, model, userBalance: user.monthly_credit_limit_inr - user.current_spend_inr };
-  } catch (error: any) {
-    return { authorized: false, error: error.message };
-  }
-}
+    // 3. The 6-Tier Routing Matrix
+    let targetModel = '';
+    let workflow = 'standard';
 
-// System Logs Asynchronous Batching (Phase 2)
-export async function logSystemEvent(level: 'info'|'warn'|'error'|'fatal', source: string, message: string, metadata: any = {}) {
-  // Fire and forget to Supabase
-  supabaseAdmin.from('system_logs').insert([{ level, source, message, metadata }]).then();
-  
-  // Forward to Azure VM (Phase 3) if environment variable is set
-  if (process.env.AZURE_VM_ENDPOINT) {
-    fetch(`${process.env.AZURE_VM_ENDPOINT}/api/telemetry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.AZURE_VM_SECRET}` },
-      body: JSON.stringify({ level, source, message, metadata, timestamp: new Date() })
-    }).catch(() => {}); // Suppress errors to not block Vercel edge
+    switch(tier) {
+      case 1:
+        targetModel = 'google.gemma-3-12b-it';
+        workflow = 'web-scraping'; // Requires Puppeteer/Lambda trigger
+        break;
+      case 2:
+        targetModel = 'google.gemma-3-4b-it';
+        workflow = 'thrift-compression'; // Forces summary-buffer
+        break;
+      case 3:
+        targetModel = 'google.gemma-3-27b-it';
+        workflow = 'profile-injected'; 
+        break;
+      case 4:
+        // Defaults to 30B, user can toggle to 480B in UI
+        targetModel = 'qwen.coder-30b';
+        workflow = 'dev-studio'; 
+        break;
+      case 5:
+        targetModel = 'glm.4-7-flash';
+        workflow = 'action-guild'; // Triggers AWS Lambda / smolagents
+        break;
+      case 6:
+        targetModel = 'custom.architect-mode';
+        workflow = 'git-orchestrator'; // Triggers AWS CodeBuild
+        break;
+      default:
+        targetModel = 'google.gemma-3-4b-it';
+        workflow = 'standard';
+    }
+
+    return {
+      success: true,
+      payload: {
+        userId,
+        tier,
+        model: targetModel,
+        workflow,
+        injectedContext: userProfile,
+        isIncognito
+      }
+    };
+
+  } catch (error: unknown) {
+    const errorMsg = error instanceof Error ? error.message : "System Exception";
+    console.error("[ORCHESTRATOR FATAL]", errorMsg);
+    return { success: false, error: errorMsg };
   }
 }
