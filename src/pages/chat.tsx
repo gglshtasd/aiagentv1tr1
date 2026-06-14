@@ -136,6 +136,7 @@ export default function ChatInterface() {
       setTerminalLogs(prev => [...prev, `> [FATAL] Tool execution failed: ${err.message}`]);
     }
   };
+  
   const handleLogout = async () => {
     await supabaseClient.auth.signOut();
     router.push('/login');
@@ -222,6 +223,16 @@ export default function ChatInterface() {
             )}
 
             <button onClick={() => setIsTerminalOpen(!isTerminalOpen)} className="px-3 py-1.5 rounded text-xs font-bold text-green-400 bg-green-900/30 border border-green-800">Terminal</button>
+            
+            {/* LOGOUT BUTTON ADDED HERE */}
+            <button 
+              onClick={handleLogout} 
+              className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold text-red-400 bg-red-900/30 border border-red-800 hover:bg-red-900/60 hover:text-white transition-colors"
+              title="Sign Out"
+            >
+              <LogOut size={14} />
+              Logout
+            </button>
           </div>
         </div>
 
@@ -241,7 +252,8 @@ export default function ChatInterface() {
           )}
           {loading && !response && <div className="text-gray-500 animate-pulse text-center">Processing...</div>}
         </div>
-{/* INPUT BOX WITH FILE ATTACHMENT */}
+        
+        {/* INPUT BOX WITH FILE ATTACHMENT */}
         <div className="p-4 bg-gray-900 border-t border-gray-800">
           <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-2 items-center">
             
