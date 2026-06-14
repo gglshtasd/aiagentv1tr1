@@ -168,12 +168,18 @@ export default function ChatInterface() {
         <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col gap-6">
           {chatHistory.map((msg, i) => (
              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-               <div className={`p-4 rounded-xl max-w-[85%] leading-relaxed ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200 border border-gray-700'}`}>{msg.content}</div>
+               {/* Inside the mapping of chatHistory */}
+               <div className={`p-4 rounded-xl max-w-[85%] leading-relaxed overflow-hidden ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200 border border-gray-700'}`}>
+                 {msg.role === 'user' ? msg.content : <MarkdownRenderer content={msg.content} />}
+               </div>
              </div>
           ))}
           {response && (
             <div className="flex justify-start">
-               <div className="p-4 rounded-xl max-w-[85%] bg-gray-800 text-gray-200 border border-gray-700 whitespace-pre-wrap">{response}</div>
+               {/* Inside the live response block */}
+               <div className="p-4 rounded-xl max-w-[85%] bg-gray-800 text-gray-200 border border-gray-700 overflow-hidden">
+                 <MarkdownRenderer content={response} />
+               </div>
             </div>
           )}
         </div>
