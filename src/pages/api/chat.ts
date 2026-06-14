@@ -1,4 +1,3 @@
-// src/pages/api/chat.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 
@@ -18,7 +17,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if ((res as any).flush) (res as any).flush();
   };
 
-  // Extract new advanced parameters and conversation state
   const { prompt, modelId, history_enabled, conversation_id, temperature, maxTokens } = req.body;
   const token = req.headers.authorization?.split(' ')[1];
 
@@ -36,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       
       const orchestratorPrompt = `
         Analyze the user prompt. Determine the intent category: 'CODE' (programming, functions) or 'TEXT' (general QA).
-        Determine if a tool is needed: 'none', 'github_actions', or 'codebuild'.
+        Determine if a tool is needed: 'none', 'github_actions', 'codebuild', or 'lambda'.
         Compress the prompt to save tokens.
         Return ONLY JSON: {"category": "CODE|TEXT", "tool_needed": "none", "compressed_prompt": "..."}
         Prompt: ${prompt}
@@ -75,7 +73,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // --- PHASE 2: MEMORY HYDRATION ---
-    // RECTIFICATION: Added explicit typing to prevent the 'any[]' build error
     let formattedMessages: { role: string; content: string }[] = [];
     
     if (conversation_id && history_enabled) {
@@ -91,7 +88,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
-    // Append current prompt
     formattedMessages.push({ role: 'user', content: finalPrompt });
 
     // --- PHASE 3: MAIN EXECUTION ---
@@ -148,6 +144,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!targetConvId) {
         const { data: newConv } = await supabaseAdmin.from('conversations').insert({ user_id: user.id, title: prompt.substring(0, 40) }).select().single();
         targetConvId = newConv?.id;
+        
+        // BUG FIX: Stream the new ID back to the frontend so it stays in the same thread
+        writeEvent({ type: 'conversation_id', id: targetConvId }); 
       }
       if (targetConvId) {
         await supabaseAdmin.from('messages').insert([
