@@ -33,10 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       writeEvent({ type: 'log', message: '> Booting Micro-Orchestrator (Google Gemma 3 4B)...' });
       
       const orchestratorPrompt = `
-        Analyze the user prompt. Determine the best model from: 'qwen-3-coder-30b', 'deepseek-v3-2', or 'qwen-3-32b'.
+        Analyze the user prompt. Determine the intent category: 'CODE' (programming, functions) or 'TEXT' (general QA).
         Determine if a tool is needed: 'none', 'github_actions', or 'codebuild'.
         Compress the prompt to save tokens.
-        Return ONLY JSON: {"target_model": "name", "tool_needed": "none", "compressed_prompt": "..."}
+        Return ONLY JSON: {"category": "CODE|TEXT", "tool_needed": "none", "compressed_prompt": "..."}
         Prompt: ${prompt}
       `;
 
@@ -48,36 +48,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           'openai-project': process.env.BEDROCK_WORKSPACE_ID!
         },
         body: JSON.stringify({
-          model: 'google.gemma-3-4b-it', // Fixed: Added 'google.' prefix for AWS proxy routing
+          model: 'google.gemma-3-4b-it',
           messages: [{ role: 'user', content: orchestratorPrompt }],
           max_tokens: 500,
           temperature: 0.1,
-          stream: false // Explicitly disable stream for JSON response
+          stream: false 
         })
       });
 
       if (!gemmaResponse.ok) {
         const errorText = await gemmaResponse.text();
-        throw new Error(`Proxy Rejected Orchestrator [HTTP ${gemmaResponse.status}]: ${errorText}`);
+        throw new Error(`Orchestrator Error [HTTP ${gemmaResponse.status}]: ${errorText}`);
       }
       
       const gemmaData = await gemmaResponse.json();
-      let routerDecision;
-      try {
-        routerDecision = JSON.parse(gemmaData.choices[0].message.content.replace(/```json|```/g, '').trim());
-      } catch (e) {
-        throw new Error(`Orchestrator returned invalid JSON: ${gemmaData.choices[0].message.content}`);
-      }
+      const routerDecision = JSON.parse(gemmaData.choices[0].message.content.replace(/```json|```/g, '').trim());
 
-      writeEvent({ type: 'log', message: `> Decision: Route to [${routerDecision.target_model}]. Tool: [${routerDecision.tool_needed}]` });
+      // STRICT MODEL ID MAPPING (Fixes the 404 Error)
+      finalTargetModel = routerDecision.category === 'CODE' 
+        ? 'qwen.qwen3-coder-30b-a3b-instruct' 
+        : 'qwen.qwen3-32b';
+
+      writeEvent({ type: 'log', message: `> Decision: Category [${routerDecision.category}]. Mapped to ID: [${finalTargetModel}]` });
       
       if (routerDecision.tool_needed !== 'none') {
-        writeEvent({ type: 'log', message: `> ⚠️ Agent requesting access to: ${routerDecision.tool_needed.toUpperCase()}` });
-        writeEvent({ type: 'tool_permission', tool: routerDecision.tool_needed, compressed_prompt: routerDecision.compressed_prompt, target_model: routerDecision.target_model });
+        writeEvent({ type: 'log', message: `> ⚠️ Agent requesting access to tool: ${routerDecision.tool_needed}` });
+        writeEvent({ type: 'tool_permission', tool: routerDecision.tool_needed, compressed_prompt: routerDecision.compressed_prompt, target_model: finalTargetModel });
         return res.end();
       }
-      
-      finalTargetModel = routerDecision.target_model;
       finalPrompt = routerDecision.compressed_prompt;
     }
 
@@ -101,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!bedrockResponse.ok) {
       const errorText = await bedrockResponse.text();
-      throw new Error(`Execution Engine Error [HTTP ${bedrockResponse.status}]: ${errorText}`);
+      throw new Error(`Execution Engine Error: ${errorText}`);
     }
 
     let fullAiResponse = '';
