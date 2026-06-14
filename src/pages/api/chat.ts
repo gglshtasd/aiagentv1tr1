@@ -2,8 +2,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 
 const region = process.env.AWS_REGION || 'us-east-1';
-
-// Initialize Supabase Admin for Ledger & Memory Access
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -12,7 +10,6 @@ const supabaseAdmin = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // 1. Establish SSE Streaming Connection
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -23,40 +20,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if ((res as any).flush) (res as any).flush();
   };
 
-  const { prompt, modelId, history_enabled, file_urls, conversation_id } = req.body;
+  const { prompt, modelId, history_enabled, conversation_id } = req.body;
   const token = req.headers.authorization?.split(' ')[1];
 
   try {
-    // --- AUTHENTICATION & CONTEXT ---
     writeEvent({ type: 'log', message: '> Validating secure JWT...' });
     const { data: { user } } = await supabaseAdmin.auth.getUser(token);
     if (!user) throw new Error("Unauthorized Access");
 
-    writeEvent({ type: 'log', message: '> Extracting developer context profile...' });
-    const { data: profile } = await supabaseAdmin
-      .from('users')
-      .select('developer_profile')
-      .eq('id', user.id)
-      .single();
-      
-    const memoryContext = profile?.developer_profile 
-      ? `\n<context>\n${JSON.stringify(profile.developer_profile)}\n</context>` 
-      : '';
+    writeEvent({ type: 'log', message: '> Booting Micro-Orchestrator (Gemma 3 4B)...' });
 
-    // --- AUTO-ROUTER LOGIC ---
-    let finalModel = modelId;
-    if (modelId === 'auto') {
-      finalModel = (prompt.includes('function') || prompt.includes('class ') || prompt.includes('def '))
-        ? 'anthropic.claude-3-sonnet-20240229-v1:0' // Stronger model for code
-        : 'anthropic.claude-3-haiku-20240307-v1:0';  // Faster model for text
+    // ---------------------------------------------------------------------------
+    // STEP 1: MICRO-ORCHESTRATOR (Zero-Cost Routing & Compression)
+    // ---------------------------------------------------------------------------
+    const orchestratorPrompt = `
+      You are the API gateway router. Analyze the user prompt.
+      Determine the best model to use from these options: 'qwen-3-coder-30b' (for coding), 'deepseek-v3-2' (for extreme complex reasoning), or 'qwen-3-32b' (for general fast chat).
+      Also determine if a tool is needed: 'none', 'github_actions', or 'codebuild'.
+      Compress the user prompt to keep core intent but save tokens.
+      Return EXACTLY this JSON format and nothing else:
+      {
+        "target_model": "model-name",
+        "tool_needed": "none",
+        "compressed_prompt": "..."
+      }
+      User Prompt: ${prompt}
+    `;
+
+    const gemmaResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.BEDROCK_API_KEY!,
+        'openai-project': process.env.BEDROCK_WORKSPACE_ID!
+      },
+      body: JSON.stringify({
+        model: 'gemma-3-4b-it',
+        messages: [{ role: 'user', content: orchestratorPrompt }],
+        max_tokens: 500,
+        temperature: 0.1
+      })
+    });
+
+    if (!gemmaResponse.ok) throw new Error("Orchestrator Offline.");
+    
+    const gemmaData = await gemmaResponse.json();
+    const routerDecision = JSON.parse(gemmaData.choices[0].message.content.replace(/```json|```/g, '').trim());
+
+    writeEvent({ type: 'log', message: `> Orchestrator Decision: Route to [${routerDecision.target_model}]. Tool: [${routerDecision.tool_needed}]` });
+
+    // ---------------------------------------------------------------------------
+    // STEP 2: TOOL PERMISSION GATE
+    // ---------------------------------------------------------------------------
+    if (routerDecision.tool_needed !== 'none') {
+      writeEvent({ type: 'log', message: `> ⚠️ Agent requesting access to: ${routerDecision.tool_needed.toUpperCase()}` });
+      writeEvent({ 
+        type: 'tool_permission', 
+        tool: routerDecision.tool_needed,
+        compressed_prompt: routerDecision.compressed_prompt,
+        target_model: routerDecision.target_model 
+      });
+      res.end();
+      return; // HALT EXECUTION UNTIL USER APPROVES ON FRONTEND
     }
 
-    let sysPrompt = `You are an elite autonomous developer agent. Adhere to repository AGENTS.md rules strictly. ${memoryContext}`;
-    let fullAiResponse = '';
+    // ---------------------------------------------------------------------------
+    // STEP 3: HEAVY EXECUTION (Streamed)
+    // ---------------------------------------------------------------------------
+    writeEvent({ type: 'log', message: `> Establishing secure execution tunnel to ${routerDecision.target_model}...` });
 
-    // --- EXECUTION (Bedrock Mantle Proxy) ---
-    writeEvent({ type: 'log', message: `> Routing request to primary node... Target: [${finalModel}]` });
-    
     const bedrockResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -65,24 +97,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'openai-project': process.env.BEDROCK_WORKSPACE_ID!
       },
       body: JSON.stringify({
-        model: finalModel,
-        messages: [
-          { role: 'system', content: sysPrompt }, 
-          { role: 'user', content: prompt }
-        ],
+        model: routerDecision.target_model,
+        messages: [{ role: 'user', content: routerDecision.compressed_prompt }],
         max_tokens: 4000,
-        stream: true // CRITICAL for the UI terminal to work
+        stream: true
       })
     });
 
-    if (!bedrockResponse.ok) {
-        const errText = await bedrockResponse.text();
-        throw new Error(`Proxy Offline: HTTP ${bedrockResponse.status} - ${errText}`);
-    }
-
-    writeEvent({ type: 'log', message: '> [STREAMING] Incoming tokens detected. Piping to stdout...' });
-
-    // --- STREAM PARSER ---
+    let fullAiResponse = '';
     const reader = bedrockResponse.body?.getReader();
     const decoder = new TextDecoder();
     
@@ -108,47 +130,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 fullAiResponse += chunk;
                 writeEvent({ type: 'token', text: chunk });
               }
-            } catch (e) {
-                // Ignore incomplete JSON chunks mid-stream
-            }
+            } catch (e) {}
           }
         }
       }
     }
 
-    // --- LOGGING & LEDGER OPERATIONS ---
+    // ---------------------------------------------------------------------------
+    // STEP 4: LEDGER & MEMORY COMMIT
+    // ---------------------------------------------------------------------------
     if (history_enabled) {
-      writeEvent({ type: 'log', message: '> Committing session records to secure database...' });
+      writeEvent({ type: 'log', message: '> Committing secure records to Supabase...' });
       
       let targetConvId = conversation_id;
-      
-      // If the frontend didn't pass an ID, make sure we create one so messages aren't orphaned
       if (!targetConvId) {
-        const { data: newConv } = await supabaseAdmin
-          .from('conversations')
-          .insert({ user_id: user.id, title: prompt.substring(0, 40) })
-          .select().single();
+        const { data: newConv } = await supabaseAdmin.from('conversations').insert({ user_id: user.id, title: prompt.substring(0, 40) }).select().single();
         targetConvId = newConv?.id;
       }
 
       if (targetConvId) {
         await supabaseAdmin.from('messages').insert([
-          { conversation_id: targetConvId, role: 'user', content: prompt, file_urls: file_urls || [] },
+          { conversation_id: targetConvId, role: 'user', content: prompt },
           { conversation_id: targetConvId, role: 'assistant', content: fullAiResponse }
         ]);
-      }
-
-      // Charge the execution to the ledger
-      const estTokens = Math.ceil((prompt.length + fullAiResponse.length) / 4);
-      const estimatedCostInr = (estTokens / 1000) * 0.5;
-
-      if (estimatedCostInr > 0) {
-        await supabaseAdmin.from('billing_ledger').insert({
-          user_id: user.id,
-          service_type: 'API_FALLBACK',
-          amount_inr: estimatedCostInr,
-          description: `AWS Execution (${finalModel}).`
-        });
       }
     }
 
