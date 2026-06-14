@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
-import { supabase } from '@/lib/supabase-client'; // Adjust path if needed
+import { supabaseClient } from '../../lib/supabase-client'; 
 
 // Types based on our Phase 1 Schema
 type User = {
@@ -37,14 +37,14 @@ export default function AdminPanel() {
     setError(null);
     try {
       // 1. Fetch Users
-      const { data: usersData, error: usersErr } = await supabase
+      const { data: usersData, error: usersErr } = await supabaseClient
         .from('users')
         .select('id, email, role, current_spend_inr, monthly_credit_limit_inr');
       
       if (usersErr) throw usersErr;
 
       // 2. Fetch Tier Permissions
-      const { data: permData, error: permErr } = await supabase
+      const { data: permData, error: permErr } = await supabaseClient
         .from('user_tier_permissions')
         .select('*');
 
@@ -67,7 +67,7 @@ export default function AdminPanel() {
       setUsers(mappedUsers);
 
       // 3. Fetch Recent System Logs
-      const { data: logsData, error: logsErr } = await supabase
+      const { data: logsData, error: logsErr } = await supabaseClient
         .from('system_logs')
         .select('*')
         .order('created_at', { ascending: false })
@@ -86,7 +86,7 @@ export default function AdminPanel() {
 
   const handleUpdateCreditLimit = async (userId: string, newLimit: number) => {
     try {
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from('users')
         .update({ monthly_credit_limit_inr: newLimit })
         .eq('id', userId);
@@ -103,7 +103,7 @@ export default function AdminPanel() {
     const newVal = !currentVal;
     try {
       // Upsert the permission
-      const { error } = await supabase
+      const { error } = await supabaseClient
         .from('user_tier_permissions')
         .upsert({ user_id: userId, tier_level: tier, is_enabled: newVal }, { onConflict: 'user_id,tier_level' });
       
@@ -124,7 +124,7 @@ export default function AdminPanel() {
 
   const handleLogout = async () => {
     try {
-      await supabase.auth.signOut();
+      await supabaseClient.auth.signOut();
       router.push('/login');
     } catch (err) {
       console.error("Logout Error:", err);
