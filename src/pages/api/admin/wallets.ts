@@ -7,6 +7,12 @@ const supabaseAdmin = createClient(
 );
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // --- VERCEL/BROWSER CACHE KILLER ---
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  // -----------------------------------
+
   // In a production environment, verify the user making this request has role = 'admin' here.
   
   if (req.method === 'GET') {
