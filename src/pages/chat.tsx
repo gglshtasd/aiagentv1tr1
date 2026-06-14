@@ -30,7 +30,8 @@ export default function ChatInterface() {
   useEffect(() => {
     supabaseClient.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        setUserEmail(session.user.email);
+        // FIXED: Fallback to null if undefined to satisfy TypeScript
+        setUserEmail(session.user.email ?? null);
         loadConversations();
       } else {
         router.push('/login');
