@@ -6,6 +6,7 @@ export default function SuperAdminPanel() {
   const [users, setUsers] = useState<any[]>([]);
   const [inviteKeys, setInviteKeys] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[] | null>(null); // Added for Audit Output
   
   const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY'>('MODELS');
   const [isTesting, setIsTesting] = useState(false);
@@ -50,9 +51,12 @@ export default function SuperAdminPanel() {
 
   const runGlobalAudit = async () => {
     setIsTesting(true);
+    setAuditLogs(null); // Clear previous results
     try {
-      await fetch('/api/admin/test-models', { method: 'POST' });
-      await fetchData(); 
+      // dryRun=true ensures it just returns results without updating the DB
+      const res = await fetch('/api/admin/test-models?dryRun=true', { method: 'POST' });
+      const data = await res.json();
+      setAuditLogs(data.results);
     } catch (err) {
       console.error(err);
     } finally {
@@ -92,7 +96,14 @@ export default function SuperAdminPanel() {
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 p-8 font-sans">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 tracking-tight">Gateway Control Plane</h1>
+        
+        {/* HEADER WITH CHAT ROUTING */}
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold tracking-tight">Gateway Control Plane</h1>
+          <button onClick={() => window.location.href = '/chat'} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold shadow transition-colors">
+            Exit to Chat ➔
+          </button>
+        </div>
         
         <div className="flex flex-wrap gap-4 mb-8">
           <button onClick={() => setActiveTab('MODELS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'MODELS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>AI Registry</button>
@@ -104,12 +115,27 @@ export default function SuperAdminPanel() {
         {/* 1. MODELS TAB */}
         {activeTab === 'MODELS' && (
           <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg">
+            
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold">Model Registry & Toggles</h2>
-              <button onClick={runGlobalAudit} disabled={isTesting} className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white px-4 py-2 rounded text-sm font-bold shadow">
-                {isTesting ? 'Running Sweep...' : 'Run Availability Audit'}
+              <button onClick={runGlobalAudit} disabled={isTesting} className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 text-white px-4 py-2 rounded text-sm font-bold shadow transition-colors">
+                {isTesting ? 'Running Sweep...' : 'Run Dry-Run Audit'}
               </button>
             </div>
+
+            {/* AUDIT OUTPUT DISPLAY */}
+            {auditLogs && (
+              <div className="mb-6 p-4 bg-black border border-gray-700 rounded-lg max-h-64 overflow-y-auto font-mono text-xs">
+                <div className="text-purple-400 mb-2 font-bold uppercase tracking-wider">--- Dry Run Results ---</div>
+                {auditLogs.map((log: any, idx: number) => (
+                  <div key={idx} className="mb-1">
+                    <span className={log.status?.includes('ONLINE') ? 'text-green-400' : 'text-red-400'}>[{log.status}]</span>{' '}
+                    <span className="text-white font-bold">{log.model_id}</span>{' '}
+                    <span className="text-gray-500">- {log.error}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <form onSubmit={addModel} className="mb-6 p-4 bg-gray-900 rounded border border-gray-700 flex flex-wrap md:flex-nowrap gap-4 items-end shadow-inner">
               <div className="flex-1 w-full">
@@ -127,9 +153,12 @@ export default function SuperAdminPanel() {
                   <option value="GIT">GIT</option>
                   <option value="SANDBOX">SANDBOX</option>
                   <option value="SYSTEM">SYSTEM</option>
+                  <option value="AUTO">AUTO</option>
+                  <option value="ADVANCED">ADVANCED</option>
+                  <option value="PREMIUM">PREMIUM</option>
                 </select>
               </div>
-              <button type="submit" className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded text-sm font-bold h-[38px] whitespace-nowrap w-full md:w-auto">Add Model</button>
+              <button type="submit" className="bg-green-600 hover:bg-green-500 px-4 py-2 rounded text-sm font-bold h-[38px] whitespace-nowrap w-full md:w-auto transition-colors">Add Model</button>
             </form>
 
             <div className="space-y-3">
