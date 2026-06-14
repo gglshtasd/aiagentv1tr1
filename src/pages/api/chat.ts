@@ -74,7 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // --- PHASE 2: MEMORY HYDRATION ---
-    let formattedMessages = [];
+    // Fixed: Added explicit typing for the message array
+    let formattedMessages: { role: string; content: string }[] = [];
+    
     if (conversation_id && history_enabled) {
       writeEvent({ type: 'log', message: '> Hydrating context from database memory...' });
       const { data: pastMessages } = await supabaseAdmin
