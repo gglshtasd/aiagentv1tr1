@@ -236,25 +236,58 @@ const logDevicePresence = async () => {
         {activeTab === 'ACTIVITY' && (
           <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg overflow-x-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold">Access Telemetry Logs</h2>
+              <h2 className="text-xl font-bold flex items-center gap-2">
+                📡 Deep Telemetry & Fraud Watch
+              </h2>
               <button onClick={fetchData} className="text-sm bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded transition-colors">🔄 Refresh</button>
             </div>
             <table className="w-full text-left text-sm text-gray-300">
               <thead className="text-xs text-gray-500 uppercase bg-gray-900 border-b border-gray-700">
                 <tr>
-                  <th className="px-4 py-3 font-semibold">Timestamp</th>
-                  <th className="px-4 py-3 font-semibold">Account Vector</th>
-                  <th className="px-4 py-3 font-semibold">IP Origin</th>
-                  <th className="px-4 py-3 font-semibold">Device Signature</th>
+                  <th className="px-4 py-3 font-semibold">Time & Account</th>
+                  <th className="px-4 py-3 font-semibold">Network Origin</th>
+                  <th className="px-4 py-3 font-semibold">Hardware Profile (GPU)</th>
+                  <th className="px-4 py-3 font-semibold">Canvas Hash</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
                 {logs.map((log) => (
                   <tr key={log.id} className="hover:bg-gray-700/50 transition-colors">
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-400">{new Date(log.login_time).toLocaleString()}</td>
-                    <td className="px-4 py-3 font-bold text-white">{log.email}</td>
-                    <td className="px-4 py-3 font-mono text-blue-400">{log.ip_address}</td>
-                    <td className="px-4 py-3 truncate max-w-xs text-xs text-gray-400" title={log.user_agent}>{log.user_agent}</td>
+                    
+                    {/* Time & Account */}
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="text-white font-bold">{log.email}</div>
+                      <div className="text-xs text-gray-500">{new Date(log.login_time).toLocaleString()}</div>
+                    </td>
+
+                    {/* Network Origin */}
+                    <td className="px-4 py-3">
+                      <div className="text-blue-400 font-bold">{log.location || 'Local/Proxy'}</div>
+                      <div className="text-xs font-mono text-gray-500">{log.ip_address}</div>
+                    </td>
+
+                    {/* Hardware Profile */}
+                    <td className="px-4 py-3">
+                      <div className="text-xs text-gray-300 font-mono truncate max-w-[200px]" title={log.gpu_model}>
+                        {log.gpu_model || 'Hidden Render Engine'}
+                      </div>
+                      <div className="flex gap-2 mt-1">
+                        <span className="bg-gray-700 text-[10px] px-1.5 py-0.5 rounded text-gray-300 border border-gray-600">
+                          {log.cpu_cores || '?'} Cores
+                        </span>
+                        <span className="bg-gray-700 text-[10px] px-1.5 py-0.5 rounded text-gray-300 border border-gray-600">
+                          {log.ram_gb || '?'}GB RAM
+                        </span>
+                      </div>
+                    </td>
+
+                    {/* Fingerprint */}
+                    <td className="px-4 py-3">
+                       <span className="bg-purple-900/40 text-purple-400 font-mono text-xs px-2 py-1 rounded border border-purple-800/50">
+                         {log.canvas_hash || 'no-hash'}
+                       </span>
+                    </td>
+
                   </tr>
                 ))}
               </tbody>
@@ -262,7 +295,6 @@ const logDevicePresence = async () => {
             {logs.length === 0 && <div className="p-4 text-center text-gray-500 text-sm italic border-t border-gray-700">Awaiting incoming connection data...</div>}
           </div>
         )}
-
       </div>
     </div>
   );
