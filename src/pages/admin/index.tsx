@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/router';
-import { supabaseClient } from '../../lib/supabase-client'; 
+import Head from 'next/head';
+import Link from 'next/link';
 
-// Strict TypeScript Interfaces for Vercel Compiler
-interface User {
+interface InviteCode {
   id: string;
-  email: string;
-  role: string;
-  current_spend_inr: number;
-  monthly_credit_limit_inr: number;
-  permissions?: Record<number, boolean>;
+  code: string;
+  max_uses: number;
+  times_used: number;
+  is_active: boolean;
+  created_at: string;
 }
 
-interface Log {
+interface SystemLog {
   id: string;
   level: string;
   source: string;
@@ -20,181 +19,146 @@ interface Log {
   created_at: string;
 }
 
-interface PermissionRecord {
-  user_id: string;
-  tier_level: number;
-  is_enabled: boolean;
-}
-
-export default function AdminPanel() {
-  const router = useRouter();
-  const [users, setUsers] = useState<User[]>([]);
-  const [logs, setLogs] = useState<Log[]>([]);
-  const [activeTab, setActiveTab] = useState<'users' | 'logs'>('users');
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function MasterAdminHub() {
+  const [invites, setInvites] = useState<InviteCode[]>([]);
+  const [logs, setLogs] = useState<SystemLog[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchAdminData();
+    fetchData();
   }, []);
 
-  const fetchAdminData = async () => {
-    setIsLoading(true);
-    setError(null);
+  const fetchData = async () => {
     try {
-      const { data: usersData, error: usersErr } = await supabaseClient
-        .from('users')
-        .select('id, email, role, current_spend_inr, monthly_credit_limit_inr');
+      const [invitesRes, logsRes] = await Promise.all([
+        fetch('/api/admin/invites', { cache: 'no-store' }),
+        fetch('/api/admin/logs', { cache: 'no-store' })
+      ]);
       
-      if (usersErr) throw usersErr;
-
-      const { data: permData, error: permErr } = await supabaseClient
-        .from('user_tier_permissions')
-        .select('*');
-
-      if (permErr) throw permErr;
-
-      // Strictly typed mapping to prevent Vercel Build Exit Code 1
-      const mappedUsers = (usersData as User[]).map((u: User) => {
-        const userPerms: Record<number, boolean> = { 1: false, 2: false, 3: false, 4: false, 5: false, 6: false };
-        
-        (permData as PermissionRecord[])
-          .filter((p) => p.user_id === u.id)
-          .forEach((p) => { userPerms[p.tier_level] = p.is_enabled; });
-
-        return { ...u, permissions: userPerms };
-      });
-
-      setUsers(mappedUsers);
-
-      const { data: logsData, error: logsErr } = await supabaseClient
-        .from('system_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-
-      if (logsErr) throw logsErr;
-      setLogs(logsData as Log[] || []);
-
+      if (invitesRes.ok) setInvites(await invitesRes.json());
+      if (logsRes.ok) setLogs(await logsRes.json());
     } catch (err) {
-      const e = err as Error;
-      console.error("Admin Fetch Error:", e);
-      setError(e.message || "Failed to load admin data");
+      console.error("Failed to fetch admin data", err);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleUpdateCreditLimit = async (userId: string, newLimit: number) => {
+  const generateInvite = async (uses: number) => {
     try {
-      const { error } = await supabaseClient
-        .from('users')
-        .update({ monthly_credit_limit_inr: newLimit })
-        .eq('id', userId);
-      
-      if (error) throw error;
-      setUsers(users.map(u => u.id === userId ? { ...u, monthly_credit_limit_inr: newLimit } : u));
+      const res = await fetch('/api/admin/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_uses: uses })
+      });
+      if (res.ok) fetchData();
     } catch (err) {
-      console.error(err);
-      alert("Failed to update credit limit. Check console.");
+      alert('Failed to generate invite');
     }
   };
 
-  const handleToggleTier = async (userId: string, tier: number, currentVal: boolean) => {
-    const newVal = !currentVal;
+  const toggleInvite = async (id: string, currentState: boolean) => {
     try {
-      const { error } = await supabaseClient
-        .from('user_tier_permissions')
-        .upsert({ user_id: userId, tier_level: tier, is_enabled: newVal }, { onConflict: 'user_id,tier_level' });
-      
-      if (error) throw error;
-      
-      setUsers(users.map(u => {
-        if (u.id === userId && u.permissions) {
-          return { ...u, permissions: { ...u.permissions, [tier]: newVal } };
-        }
-        return u;
-      }));
+      const res = await fetch('/api/admin/invites', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, is_active: !currentState })
+      });
+      if (res.ok) fetchData();
     } catch (err) {
-      console.error(err);
-      alert(`Failed to update Tier ${tier}. Check console.`);
+      alert('Failed to toggle invite');
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await supabaseClient.auth.signOut();
-      router.push('/login');
-    } catch (err) {
-      console.error("Logout Error:", err);
-    }
-  };
-
-  if (isLoading) return <div className="p-10 text-white bg-gray-900 min-h-screen">Loading Orchestrator Data...</div>;
+  if (loading) return <div className="min-h-screen bg-gray-950 text-green-400 font-mono p-8 flex items-center justify-center">INITIALIZING SECURE UPLINK...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-200 p-6 font-mono">
-      <header className="flex justify-between items-center mb-8 border-b border-gray-800 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-emerald-400">Master AI Orchestrator</h1>
-          <p className="text-sm text-gray-500">System Administration & Telemetry</p>
-        </div>
-        <button onClick={handleLogout} className="px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-200 rounded transition-colors text-sm">
-          [ TERMINATE_SESSION ]
-        </button>
-      </header>
+    <div className="min-h-screen bg-gray-950 text-gray-300 font-mono p-8 selection:bg-green-900 selection:text-green-100">
+      <Head><title>Master Orchestrator | Command Center</title></Head>
 
-      {error && <div className="bg-red-900/50 text-red-200 p-3 rounded mb-6 border border-red-800">{error}</div>}
+      <div className="max-w-7xl mx-auto space-y-8">
+        
+        {/* Header Section */}
+        <header className="border-b border-green-900/50 pb-6 flex justify-between items-end">
+          <div>
+            <h1 className="text-3xl font-bold text-green-500 tracking-tighter">[ SYSTEM_ADMIN_HUB ]</h1>
+            <p className="text-sm text-gray-500 mt-2">v3.0 Multi-Agent Orchestration & Network Access Control</p>
+          </div>
+          <Link href="/admin/billing" className="px-4 py-2 bg-green-900/20 text-green-400 border border-green-800 rounded hover:bg-green-900/40 transition-all text-sm shadow-[0_0_15px_rgba(34,197,94,0.1)]">
+            → Access Enterprise Ledger
+          </Link>
+        </header>
 
-      <div className="flex gap-4 mb-6">
-        <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded ${activeTab === 'users' ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-800' : 'bg-gray-900 hover:bg-gray-800'}`}>Access & Billing Limits</button>
-        <button onClick={() => setActiveTab('logs')} className={`px-4 py-2 rounded ${activeTab === 'logs' ? 'bg-emerald-900/50 text-emerald-400 border border-emerald-800' : 'bg-gray-900 hover:bg-gray-800'}`}>System Logs</button>
-      </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          
+          {/* Left Column: Invite System */}
+          <div className="lg:col-span-1 space-y-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 shadow-2xl">
+              <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span> Access Keys
+              </h2>
+              
+              <div className="flex gap-2 mb-6">
+                <button onClick={() => generateInvite(1)} className="flex-1 bg-blue-900/20 text-blue-400 border border-blue-800 rounded py-2 text-xs hover:bg-blue-900/40 transition-colors">
+                  Generate (1-Use)
+                </button>
+                <button onClick={() => generateInvite(5)} className="flex-1 bg-purple-900/20 text-purple-400 border border-purple-800 rounded py-2 text-xs hover:bg-purple-900/40 transition-colors">
+                  Generate (5-Use)
+                </button>
+              </div>
 
-      {activeTab === 'users' && (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-gray-950 border-b border-gray-800">
-              <tr><th className="p-4">User Email</th><th className="p-4">Spend (INR)</th><th className="p-4">Monthly Limit (INR)</th><th className="p-4">Tier Access Routing (T1 - T6)</th></tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} className="border-b border-gray-800 hover:bg-gray-800/50">
-                  <td className="p-4 text-gray-300">{u.email} <span className="text-xs text-gray-600 block">{u.role}</span></td>
-                  <td className="p-4 font-mono text-emerald-400">₹{u.current_spend_inr || 0}</td>
-                  <td className="p-4">
-                    <input type="number" defaultValue={u.monthly_credit_limit_inr} onBlur={(e) => handleUpdateCreditLimit(u.id, Number(e.target.value))} className="bg-gray-950 border border-gray-700 rounded px-2 py-1 w-24 text-white focus:border-emerald-500 outline-none" />
-                  </td>
-                  <td className="p-4">
-                    <div className="flex gap-2">
-                      {[1, 2, 3, 4, 5, 6].map(tier => (
-                        <label key={tier} className="flex flex-col items-center cursor-pointer group">
-                          <span className="text-xs text-gray-500 mb-1">T{tier}</span>
-                          <input type="checkbox" checked={u.permissions?.[tier] || false} onChange={() => handleToggleTier(u.id, tier, u.permissions?.[tier] || false)} className="accent-emerald-500 w-4 h-4 cursor-pointer" />
-                        </label>
-                      ))}
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                {invites.map(inv => (
+                  <div key={inv.id} className="p-3 bg-gray-950 border border-gray-800 rounded flex justify-between items-center group hover:border-gray-600 transition-colors">
+                    <div>
+                      <div className="text-white font-bold tracking-widest text-sm">{inv.code}</div>
+                      <div className="text-[10px] text-gray-500 mt-1">Uses: {inv.times_used} / {inv.max_uses}</div>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {activeTab === 'logs' && (
-        <div className="bg-black border border-gray-800 rounded-lg p-4 font-mono text-xs overflow-y-auto max-h-[70vh]">
-          {logs.length === 0 ? <p className="text-gray-600">No telemetry data available.</p> : null}
-          {logs.map(log => (
-            <div key={log.id} className="mb-2 pb-2 border-b border-gray-900 flex gap-4">
-              <span className="text-gray-600 w-40 shrink-0">{new Date(log.created_at).toLocaleString()}</span>
-              <span className={`w-16 shrink-0 font-bold ${log.level === 'error' ? 'text-red-500' : log.level === 'warn' ? 'text-yellow-500' : 'text-blue-400'}`}>[{log.level.toUpperCase()}]</span>
-              <span className="text-purple-400 w-24 shrink-0">{log.source}</span>
-              <span className="text-gray-300">{log.message}</span>
+                    <button 
+                      onClick={() => toggleInvite(inv.id, inv.is_active)}
+                      className={`text-xs px-2 py-1 rounded border ${inv.is_active ? 'bg-green-900/20 text-green-400 border-green-800' : 'bg-red-900/20 text-red-400 border-red-800'}`}
+                    >
+                      {inv.is_active ? 'ACTIVE' : 'REVOKED'}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          </div>
+
+          {/* Right Column: Telemetry Feed */}
+          <div className="lg:col-span-2">
+            <div className="bg-black border border-gray-800 rounded-lg p-6 shadow-2xl h-full">
+               <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span> Raw Telemetry Sink
+              </h2>
+              
+              <div className="bg-gray-950 border border-gray-900 rounded p-4 h-[600px] overflow-y-auto font-mono text-xs space-y-2">
+                {logs.length === 0 ? (
+                  <div className="text-gray-600 italic">Waiting for incoming telemetry...</div>
+                ) : (
+                  logs.map(log => (
+                    <div key={log.id} className="flex gap-4 border-b border-gray-900 pb-2 hover:bg-gray-900/50 p-1">
+                      <span className="text-gray-600 whitespace-nowrap">
+                        [{new Date(log.created_at).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}]
+                      </span>
+                      <span className={`w-16 font-bold ${
+                        log.level === 'error' || log.level === 'fatal' ? 'text-red-500' :
+                        log.level === 'warn' ? 'text-yellow-500' : 'text-blue-500'
+                      }`}>
+                        {log.level.toUpperCase()}
+                      </span>
+                      <span className="text-gray-500 w-24 truncate">[{log.source}]</span>
+                      <span className="text-gray-300">{log.message}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
         </div>
-      )}
+      </div>
     </div>
   );
 }
