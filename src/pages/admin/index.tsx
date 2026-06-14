@@ -1,5 +1,5 @@
 import { generateTelemetryPayload } from '../../lib/telemetry';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabaseClient } from '../../lib/supabase-client';
 
 export default function SuperAdminPanel() {
@@ -9,7 +9,7 @@ export default function SuperAdminPanel() {
   const [logs, setLogs] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[] | null>(null); // Added for Audit Output
   
-  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY'>('MODELS');
+  const [activeTab, setActiveTab] = useState<'MODELS' | 'USERS' | 'KEYS' | 'ACTIVITY' | 'SYSTEM'>('MODELS');
   const [isTesting, setIsTesting] = useState(false);
 
   // --- MODEL STATE ---
@@ -17,12 +17,19 @@ export default function SuperAdminPanel() {
   const [newModelName, setNewModelName] = useState('');
   const [newModelTier, setNewModelTier] = useState('CHAT');
 
+  // --- SYSTEM TEST STATE ---
+  const [testLogs, setTestLogs] = useState<string[]>([]);
+  const terminalEndRef = useRef<HTMLDivElement>(null);
+
+  // Add scrolling effect for System Terminal
+  useEffect(() => { terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [testLogs]);
+
   useEffect(() => {
     fetchData();
     logDevicePresence();
   }, []);
 
-const logDevicePresence = async () => {
+  const logDevicePresence = async () => {
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (session) {
       const payload = await generateTelemetryPayload();
@@ -47,6 +54,25 @@ const logDevicePresence = async () => {
     if (uData) setUsers(uData);
     if (kData) setInviteKeys(kData);
     if (lData) setLogs(lData);
+  };
+
+  // --- SYSTEM TEST FUNCTIONS ---
+  const runSystemTest = async (target: string) => {
+    setTestLogs(prev => [...prev, `\n> [${new Date().toLocaleTimeString()}] Initiating test sequence: ${target.toUpperCase()}`]);
+    try {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      const res = await fetch('/api/admin/test-system', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ target })
+      });
+      
+      const data = await res.json();
+      setTestLogs(prev => [...prev, `> HTTP Status: ${res.status}`]);
+      setTestLogs(prev => [...prev, `> Output:\n${JSON.stringify(data, null, 2)}`]);
+    } catch (err: any) {
+      setTestLogs(prev => [...prev, `> Error: ${err.message}`]);
+    }
   };
 
   // --- MODEL FUNCTIONS ---
@@ -116,6 +142,7 @@ const logDevicePresence = async () => {
           <button onClick={() => setActiveTab('USERS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'USERS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Financial Limits</button>
           <button onClick={() => setActiveTab('KEYS')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'KEYS' ? 'bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Invite Keys</button>
           <button onClick={() => setActiveTab('ACTIVITY')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'ACTIVITY' ? 'bg-purple-600' : 'bg-gray-800 hover:bg-gray-700'}`}>Telemetry</button>
+          <button onClick={() => setActiveTab('SYSTEM')} className={`px-4 py-2 rounded font-semibold transition-colors ${activeTab === 'SYSTEM' ? 'bg-orange-600 text-white' : 'bg-gray-800 hover:bg-gray-700'}`}>System Tests</button>
         </div>
 
         {/* 1. MODELS TAB */}
@@ -293,6 +320,44 @@ const logDevicePresence = async () => {
               </tbody>
             </table>
             {logs.length === 0 && <div className="p-4 text-center text-gray-500 text-sm italic border-t border-gray-700">Awaiting incoming connection data...</div>}
+          </div>
+        )}
+
+        {/* 5. SYSTEM TAB */}
+        {activeTab === 'SYSTEM' && (
+          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 shadow-lg flex flex-col md:flex-row gap-6">
+            <div className="w-full md:w-1/3 flex flex-col gap-3">
+              <h2 className="text-xl font-bold mb-2 border-b border-gray-700 pb-2">Diagnostic Triggers</h2>
+              <button onClick={() => runSystemTest('lambda')} className="bg-gray-700 hover:bg-gray-600 text-left px-4 py-3 rounded border border-gray-600 transition-colors">
+                <div className="font-bold text-orange-400">Test AWS Lambda</div>
+                <div className="text-xs text-gray-400">Pings serverless scraping functions</div>
+              </button>
+              <button onClick={() => runSystemTest('codebuild')} className="bg-gray-700 hover:bg-gray-600 text-left px-4 py-3 rounded border border-gray-600 transition-colors">
+                <div className="font-bold text-blue-400">Test AWS CodeBuild</div>
+                <div className="text-xs text-gray-400">Validates sandbox container spin-up</div>
+              </button>
+              <button onClick={() => runSystemTest('github')} className="bg-gray-700 hover:bg-gray-600 text-left px-4 py-3 rounded border border-gray-600 transition-colors">
+                <div className="font-bold text-white">Test GitHub Actions</div>
+                <div className="text-xs text-gray-400">Dispatches dummy workflow payload</div>
+              </button>
+              <button onClick={() => runSystemTest('llm')} className="bg-gray-700 hover:bg-gray-600 text-left px-4 py-3 rounded border border-gray-600 transition-colors">
+                <div className="font-bold text-green-400">Test LLM Orchestrator</div>
+                <div className="text-xs text-gray-400">Validates proxy routing & payload</div>
+              </button>
+              <button onClick={() => setTestLogs([])} className="mt-4 text-xs font-bold text-gray-500 hover:text-white uppercase tracking-widest text-center py-2">
+                Clear Logs
+              </button>
+            </div>
+            
+            {/* Admin Terminal Box */}
+            <div className="w-full md:w-2/3 bg-black rounded-lg border border-gray-700 p-4 font-mono text-xs overflow-y-auto h-[500px] shadow-inner text-green-400">
+              <div className="text-gray-500 mb-4 pb-2 border-b border-gray-800 uppercase tracking-widest">Diagnostic Output Terminal</div>
+              {testLogs.map((log, idx) => (
+                <div key={idx} className="mb-2 whitespace-pre-wrap break-words">{log}</div>
+              ))}
+              <div ref={terminalEndRef} />
+              {testLogs.length === 0 && <div className="text-gray-600 italic">Waiting for diagnostic trigger...</div>}
+            </div>
           </div>
         )}
       </div>
