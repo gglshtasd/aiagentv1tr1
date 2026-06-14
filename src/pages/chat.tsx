@@ -1,3 +1,4 @@
+import MarkdownRenderer from '../components/MarkdownRenderer';
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseClient } from '../lib/supabase-client';
