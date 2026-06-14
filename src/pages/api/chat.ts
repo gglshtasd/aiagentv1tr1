@@ -70,6 +70,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     
+    // --- PHASE 5: SHADOW PROFILE INJECTION ---
+    if (!incognito && process.env.AZURE_VM_ENDPOINT) {
+      try {
+        writeEvent({ type: 'log', message: '> Fetching User Shadow Profile from Azure...' });
+        const profileRes = await fetch(`${process.env.AZURE_VM_ENDPOINT}/api/profile/${user.id}`, {
+          headers: { 'Authorization': `Bearer ${process.env.AZURE_VM_SECRET}` }
+        });
+        
+        if (profileRes.ok) {
+          const profileText = await profileRes.text();
+          if (profileText) {
+            formattedMessages.unshift({ 
+              role: 'system', 
+              content: `[SYSTEM: USER SHADOW PROFILE]\nAdapt your response based on these known user traits:\n${profileText}` 
+            });
+            writeEvent({ type: 'log', message: '> Shadow Profile injected into execution context.' });
+          }
+        }
+      } catch (err) {
+        // Fail gracefully without crashing the chat if Azure is briefly unreachable
+        writeEvent({ type: 'log', message: '> Shadow Profile bypass (Network Timeout).' });
+      }
+    }
+
+    // Push the final user prompt *after* the profile and memory have been loaded
     formattedMessages.push({ role: 'user', content: finalPrompt });
 
     // --- EXECUTION ---
