@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { supabaseClient } from '../lib/supabase-client';
 import ModelSelector from '../components/ModelSelector';
-import { Paperclip, Loader2 } from 'lucide-react';
+import { Paperclip, Loader2, LogOut } from 'lucide-react';
 
 export default function ChatInterface() {
   const router = useRouter();
@@ -135,6 +135,10 @@ export default function ChatInterface() {
     } catch (err: any) {
       setTerminalLogs(prev => [...prev, `> [FATAL] Tool execution failed: ${err.message}`]);
     }
+  };
+  const handleLogout = async () => {
+    await supabaseClient.auth.signOut();
+    router.push('/login');
   };
 
   // Group Conversations chronologically
