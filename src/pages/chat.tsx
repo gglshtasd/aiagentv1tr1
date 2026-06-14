@@ -99,6 +99,10 @@ export default function ChatInterface() {
               try {
                 const parsed = JSON.parse(dataStr);
                 if (parsed.type === 'tool_permission') { setPendingTool(parsed); setLoading(false); return; }
+                
+                // BUG FIX: Lock the new conversation ID to the active state instantly
+                if (parsed.type === 'conversation_id') { setCurrentConvId(parsed.id); } 
+                
                 if (parsed.type === 'log') setTerminalLogs(prev => [...prev, parsed.message]);
                 else if (parsed.type === 'token') { currentResponse += parsed.text; setResponse(currentResponse); }
                 else if (parsed.type === 'error') alert(`Gateway Error: ${parsed.message}`);
