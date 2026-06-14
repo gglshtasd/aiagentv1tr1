@@ -1,52 +1,61 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createPagesServerClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  console.log('[API] === CALLBACK ROUTE HIT ===');
-  console.log('[API] Query Parameters Received:', req.query);
-  
   const { code } = req.query;
 
   if (code) {
-    try {
-      const supabase = createPagesServerClient({ req, res });
-      console.log('[API] Exchanging Google code for secure session...');
-      
-      const { error } = await supabase.auth.exchangeCodeForSession(String(code));
-      
-      if (error) {
-        console.error('[API] FATAL: Code Exchange Failed:', error.message);
-        return res.redirect('/login?error=exchange_failed');
-      }
-
-      console.log('[API] Session created. Verifying user database role...');
+    const supabase = createPagesServerClient({ req, res });
+    
+    // 1. Exchange the secure Google code
+    const { error } = await supabase.auth.exchangeCodeForSession(String(code));
+    
+    if (!error) {
+      // 2. Extract the exact user data straight from Google
       const { data: { user } } = await supabase.auth.getUser();
 
       if (user) {
-        const { data: userRecord, error: dbError } = await supabase
+        // ==========================================
+        // 🔥 THE ULTIMATE ADMIN BYPASS 🔥
+        // ==========================================
+        if (user.email === 'gglshtasd@gmail.com') {
+          console.log('[AUTH] Master Email detected. Forcing Super Admin privileges...');
+          
+          // Use the Service Role Key to ruthlessly overwrite the database
+          const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!, 
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+          );
+
+          await supabaseAdmin.from('users').upsert({
+            id: user.id,
+            email: user.email,
+            role: 'admin',
+            advanced_mode_enabled: true,
+            monthly_credit_limit_inr: 999999
+          });
+
+          // Route immediately to the control plane
+          return res.redirect('/admin');
+        }
+
+        // ==========================================
+        // STANDARD USER ROUTING
+        // ==========================================
+        const { data: userRecord } = await supabase
           .from('users')
           .select('role')
           .eq('id', user.id)
           .single();
-
-        if (dbError) {
-          console.error('[API] ERROR: Could not fetch user from users table:', dbError.message);
-        }
-
-        console.log(`[API] Target User Role: [${userRecord?.role?.toUpperCase() || 'NULL'}]`);
         
         if (userRecord?.role === 'admin') {
-          console.log('[API] Super Admin verified. Routing to Control Plane.');
           return res.redirect('/admin');
         }
       }
-    } catch (err) {
-      console.error('[API] CATCH BLOCK EXCEPTION:', err);
     }
-  } else {
-    console.warn('[API] WARNING: No code found in URL. Google redirect failed.');
   }
   
-  console.log('[API] Default user routing activated -> /chat');
+  // Default fallback
   res.redirect('/chat');
 }
