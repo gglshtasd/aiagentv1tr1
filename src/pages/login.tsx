@@ -11,30 +11,46 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
-  // NEW: Background listener to prevent getting stuck on the login page
+// ... existing state variables ...
+
   useEffect(() => {
+    console.log('[CLIENT] Login page mounted. Attaching Supabase listener...');
+    
     const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event, session) => {
+      console.log(`[CLIENT] Auth Event Triggered: ${event}`);
+      
       if (event === 'SIGNED_IN' && session) {
-        supabaseClient.from('users').select('role').eq('id', session.user.id).single().then(({data}) => {
-           window.location.href = data?.role === 'admin' ? '/admin' : '/chat';
-        });
+        console.log(`[CLIENT] User signed in locally: ${session.user.email}. Checking DB...`);
+        
+        supabaseClient.from('users').select('role').eq('id', session.user.id).single()
+          .then(({data, error}) => {
+             if (error) console.error('[CLIENT] Database mapping error:', error);
+             console.log(`[CLIENT] Database Role confirmed: ${data?.role}`);
+             window.location.href = data?.role === 'admin' ? '/admin' : '/chat';
+          });
       }
     });
+    
     return () => subscription.unsubscribe();
   }, []);
 
   const handleGoogleLogin = async () => {
     setLoading(true);
+    console.log('[CLIENT] Initiating Google OAuth sequence...');
+    
+    const redirectTarget = `${window.location.origin}/api/auth/callback`;
+    console.log(`[CLIENT] Instructing Supabase to redirect back to: ${redirectTarget}`);
+    
     try {
       const { error } = await supabaseClient.auth.signInWithOAuth({
         provider: 'google',
         options: { 
-          // FIX: Send Google response to the new server callback route
-          redirectTo: `${window.location.origin}/api/auth/callback` 
+          redirectTo: redirectTarget 
         }
       });
       if (error) throw error;
     } catch (err: any) {
+      console.error('[CLIENT] Google OAuth Error:', err.message);
       setMessage(err.message);
       setLoading(false);
     }
