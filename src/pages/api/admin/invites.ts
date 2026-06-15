@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
-import { randomBytes } from 'crypto';
+import { randomUUID } from 'crypto';
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -9,7 +9,6 @@ const supabaseAdmin = createClient(
 );
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Global Cache-Killer for Admin Routes
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -22,8 +21,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'POST') {
     const { max_uses } = req.body;
-    // Generate a secure, hacker-style code (e.g., MAST-A1B2C3D4)
-    const code = 'MAST-' + randomBytes(4).toString('hex').toUpperCase();
+    // CRITICAL FIX: The database schema demands a UUID. 
+    const code = randomUUID();
     
     const { data, error } = await supabaseAdmin.from('invite_codes').insert({
       code,
