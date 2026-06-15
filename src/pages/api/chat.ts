@@ -1,7 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createClient } from '@supabase/supabase-js';
 
-// Initialize Supabase with Service Role to bypass RLS for backend verifications
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -10,7 +9,6 @@ const supabase = createClient(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  // Initialize Server-Sent Events (SSE) Stream
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -23,100 +21,100 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { prompt, mode, incognito, conversation_id } = req.body;
     
-    // 1. AUTHENTICATION MIDDLEWARE
+    // 1. AUTHENTICATION & LEDGER
     sendLog(`> [AUTH] Validating secure JWT for mode: ${mode}...`);
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new Error("Unauthorized Access - Missing Token");
-    }
+    if (!authHeader || !authHeader.startsWith('Bearer ')) throw new Error("Unauthorized Access - Missing Token");
 
     const token = authHeader.split(' ')[1];
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
     if (authError || !user) throw new Error("Unauthorized Access - Invalid Session");
+    
     sendLog(`> [AUTH] Session verified for user: ${user.id}`);
-
     if (incognito) sendLog(`> [SYSTEM] 🕶️ INCOGNITO ACTIVE. Database writes suspended.`);
 
-    // 2. WALLET & BILLING INTERCEPTOR (Bypass for now if auto-provisioning)
     const { data: wallet } = await supabase.from('users_wallet').select('is_blocked').eq('user_id', user.id).single();
     if (wallet?.is_blocked) throw new Error("Wallet Blocked - Insufficient Wallet Capacity");
 
-    // 3. 5-MODE ROUTING ENGINE (Using your exact working model IDs)
+    // 2. PRIMARY ROUTING ENGINE
     let targetModel = "";
-    let workflow = "";
-
     switch (mode) {
-      case 'budget':
-        targetModel = "google.gemma-3-4b-it";
-        workflow = "thrift-compression";
-        break;
-      case 'info':
-        targetModel = "google.gemma-3-12b-it";
-        workflow = "web-browse-worker";
-        break;
-      case 'workspace':
-        targetModel = "google.gemma-3-27b-it";
-        workflow = "standard-engineering";
-        break;
-      case 'dev':
-        targetModel = "qwen.qwen3-coder-30b-a3b-instruct";
-        workflow = "code-centric";
-        break;
-      case 'task':
-        targetModel = "zai.glm-4.7-flash";
-        workflow = "smolagents-lambda-trigger";
-        break;
-      case 'architect':
-        targetModel = "custom.architect-mode";
-        workflow = "unrestricted-override";
-        break;
-      default:
-        targetModel = "google.gemma-3-4b-it";
-        workflow = "fallback";
+      case 'budget': targetModel = "google.gemma-3-4b-it"; break;
+      case 'info': targetModel = "google.gemma-3-12b-it"; break;
+      case 'workspace': targetModel = "google.gemma-3-27b-it"; break;
+      case 'dev': targetModel = "qwen.qwen3-coder-30b-a3b-instruct"; break;
+      case 'task': targetModel = "zai.glm-4.7-flash"; break;
+      case 'architect': targetModel = "custom.architect-mode"; break;
+      default: targetModel = "google.gemma-3-4b-it";
     }
 
-    sendLog(`> [ROUTER] Assigned Workflow: ${workflow}`);
-    sendLog(`> [ROUTER] Target Compute: [${targetModel}]`);
+    sendLog(`> [ROUTER] Primary Target Compute: [${targetModel}]`);
 
-    // --- EXECUTION ENGINE ---
+    // 3. EXECUTION ENGINE
     let llmResponse: Response | null = null;
-    let usingFallback = false;
+    const awsRegion = process.env.AWS_REGION || 'us-east-1';
+    
+    // STANDARD AWS MANTLE HEADERS (Properly Formatted per Guide)
+    const directAwsHeaders = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.BEDROCK_API_KEY}`,
+      'OpenAI-Project': process.env.BEDROCK_WORKSPACE_ID!
+    };
 
     // ATTEMPT 1: Azure VM LiteLLM Tunnel
     try {
       const proxyUrl = process.env.LITELLM_PROXY_URL;
-      if (proxyUrl && !proxyUrl.includes('127.0.0.1')) {
-        sendLog(`> [NETWORK] Opening secure inference tunnel to Azure VM: ${proxyUrl}...`);
-        llmResponse = await fetch(`${proxyUrl}/v1/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.LITELLM_MASTER_KEY}`
-          },
-          body: JSON.stringify({ model: targetModel, messages: [{ role: 'user', content: prompt }], stream: true })
-        });
-        
-        if (!llmResponse.ok) throw new Error(`HTTP ${llmResponse.status}`);
-      } else {
-        throw new Error("Azure VM URL not configured correctly.");
-      }
-    } catch (proxyError: any) {
-      // ATTEMPT 2: Fail-safe Direct AWS Bedrock Mantle Connection
-      sendLog(`> [NETWORK WARNING] Azure VM Tunnel Failed: ${proxyError.message}`);
-      sendLog(`> [NETWORK] Triggering Fail-safe: Direct AWS Bedrock Mantle Connection...`);
-      usingFallback = true;
+      if (!proxyUrl || proxyUrl.includes('127.0.0.1')) throw new Error("Azure VM URL missing or local.");
       
-      const region = process.env.AWS_REGION || 'us-east-1';
-      llmResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+      sendLog(`> [NETWORK] Opening secure inference tunnel to Azure VM...`);
+      llmResponse = await fetch(`${proxyUrl}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json', 
-          'x-api-key': process.env.BEDROCK_API_KEY!, 
-          'openai-project': process.env.BEDROCK_WORKSPACE_ID! 
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.LITELLM_MASTER_KEY}`
         },
+        body: JSON.stringify({ model: targetModel, messages: [{ role: 'user', content: prompt }], stream: true })
+      });
+      
+      if (!llmResponse.ok) throw new Error(`HTTP ${llmResponse.status}`);
+      
+    } catch (proxyError: any) {
+      
+      // ATTEMPT 2: FAIL-SAFE & AUTO-ROUTER
+      sendLog(`> [NETWORK WARNING] Azure Tunnel Failed. Initiating Direct AWS Fallback...`);
+      let fallbackModel = targetModel;
+
+      // Micro-Orchestrator: Auto Model Selection (Skip for task/architect)
+      if (mode !== 'task' && mode !== 'architect') {
+        sendLog(`> [ROUTER] Running Micro-Orchestrator for AWS fallback auto-selection...`);
+        try {
+          const classRes = await fetch(`https://bedrock-mantle.${awsRegion}.api.aws/v1/chat/completions`, {
+            method: 'POST',
+            headers: directAwsHeaders,
+            body: JSON.stringify({
+              model: 'google.gemma-3-4b-it',
+              messages: [{ role: 'user', content: `Classify this prompt as either strictly 'CODE' or strictly 'TEXT'. Output exactly one word. Prompt: ${prompt}` }],
+              temperature: 0.1
+            })
+          });
+          
+          const classData = await classRes.json();
+          const rawContent = (classData.choices?.[0]?.message?.content || '').toUpperCase();
+          
+          // Route based on dynamic context
+          fallbackModel = rawContent.includes('CODE') ? 'qwen.qwen3-coder-30b-a3b-instruct' : 'google.gemma-3-12b-it';
+          sendLog(`> [ROUTER] Auto-Routed Fallback to: [${fallbackModel}]`);
+        } catch (err) {
+          sendLog(`> [ROUTER] Classification timeout. Defaulting to [${fallbackModel}]`);
+        }
+      }
+
+      // Execute Direct AWS Fallback
+      llmResponse = await fetch(`https://bedrock-mantle.${awsRegion}.api.aws/v1/chat/completions`, {
+        method: 'POST',
+        headers: directAwsHeaders,
         body: JSON.stringify({ 
-          model: targetModel, 
+          model: fallbackModel, 
           messages: [{ role: 'user', content: prompt }], 
           max_tokens: 4000, 
           temperature: 0.7, 
@@ -128,9 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sendLog(`> [NETWORK] AWS Direct Connection Established.`);
     }
 
-    if (!llmResponse) throw new Error("All inference routes failed.");
-
-    // --- STREAM PROCESSING ---
+    // 4. STREAM PROCESSING
     const reader = llmResponse.body?.getReader();
     const decoder = new TextDecoder();
     
@@ -148,11 +144,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (dataStr === '[DONE]') break;
         try {
           const parsed = JSON.parse(dataStr);
-          // Handle standard OpenAI-compatible chunk format
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) sendToken(content);
         } catch (e) {
-          // Ignore malformed JSON chunks
+          // Ignore malformed chunks
         }
       }
     }
