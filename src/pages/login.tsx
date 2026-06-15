@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase-client';
 
 export default function LoginPage() {
@@ -11,11 +11,70 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
+  useEffect(() => {
+    console.log('[VERCEL LOG] Login page mounted. Attaching auth listener...');
+    
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(`[VERCEL LOG] Auth Event: ${event}`);
+      
+      if (event === 'SIGNED_IN' && session) {
+        console.log(`[VERCEL LOG] User authenticated: ${session.user.email}. Checking registry...`);
+        
+        // 1. Check if user already exists in our database
+        const { data: userRecord } = await supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
+
+        if (userRecord) {
+          console.log(`[VERCEL LOG] Existing user found. Role: ${userRecord.role}. Routing...`);
+          window.location.replace(userRecord.role === 'admin' ? '/admin' : '/chat');
+          return;
+        }
+
+        // 2. NEW USER DETECTED (Usually from Google OAuth)
+        console.log('[VERCEL LOG] New user detected! Validating stored invite code...');
+        const storedInvite = localStorage.getItem('pending_invite_code') || '';
+        const isMasterKey = storedInvite === process.env.NEXT_PUBLIC_STARTER_KEY;
+        let isValidDbKey = false;
+
+        if (!isMasterKey && storedInvite) {
+          const { data: keyData } = await supabase.from('invite_codes').select('*').eq('code', storedInvite).eq('is_active', true).maybeSingle();
+          if (keyData) isValidDbKey = true;
+        }
+
+        if (isMasterKey || isValidDbKey) {
+           console.log('[VERCEL LOG] Invite valid! Provisioning Enterprise Ledger and Profile...');
+           const role = isMasterKey ? 'admin' : 'user';
+           const limit = isMasterKey ? 50000 : 500;
+
+           await supabase.from('users').insert({ id: session.user.id, email: session.user.email, role, monthly_credit_limit_inr: limit, advanced_mode_enabled: isMasterKey });
+           await supabase.from('users_wallet').insert({ user_id: session.user.id, balance_inr: 0, monthly_credit_limit_inr: limit, margin_multiplier: 1.6 });
+
+           if (isValidDbKey) await supabase.from('invite_codes').update({ is_active: false }).eq('code', storedInvite);
+           localStorage.removeItem('pending_invite_code');
+
+           window.location.replace(role === 'admin' ? '/admin' : '/chat');
+        } else {
+           console.warn('[VERCEL LOG] ILLEGAL ACCESS: No valid invite code provided for new Google account.');
+           await supabase.auth.signOut();
+           setMessage('Access Denied: An Invite Code is required to register via Google. Paste your key below and try again.');
+        }
+      }
+    });
+    
+    return () => subscription.unsubscribe();
+  }, []);
+
   const handleGoogleLogin = async () => {
+    if (isSigningUp && !inviteCode) {
+      setMessage("Please enter an Invite Code before continuing with Google.");
+      return;
+    }
+    
     setLoading(true);
-    const redirectTarget = `${window.location.origin}/api/auth/callback`;
+    console.log('[VERCEL LOG] Caching invite code and routing to Google OAuth...');
+    if (inviteCode) localStorage.setItem('pending_invite_code', inviteCode);
+    
     try {
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTarget } });
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/login` } });
       if (error) throw error;
     } catch (err: any) {
       setMessage(err.message);
@@ -27,57 +86,22 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setMessage('');
+    console.log(`[VERCEL LOG] Processing Email Auth... Signing Up: ${isSigningUp}`);
 
     try {
       if (isSigningUp) {
-        const isMasterKey = inviteCode === process.env.NEXT_PUBLIC_STARTER_KEY;
-        let isValidDbKey = false;
-        
-        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(inviteCode);
-
-        if (!isMasterKey && isUUID) {
-          const { data: keyData } = await supabase.from('invite_codes').select('*').eq('code', inviteCode).eq('is_active', true).maybeSingle();
-          if (keyData) isValidDbKey = true;
-        }
-
-        if (!isMasterKey && !isValidDbKey) throw new Error('Access Denied: Invalid or Used Invite Key.');
-
-        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
-        if (authError) throw authError;
-
-        if (authData.user) {
-          const assignedRole = isMasterKey ? 'admin' : 'user';
-          const monthlyLimit = isMasterKey ? 50000 : 500;
-          
-          // 1. Create Core User
-          await supabase.from('users').upsert({
-            id: authData.user.id, email: email, role: assignedRole,
-            advanced_mode_enabled: isMasterKey, monthly_credit_limit_inr: monthlyLimit
-          });
-
-          // 2. Initialize Ledger Wallet (FIXED)
-          await supabase.from('users_wallet').upsert({
-            user_id: authData.user.id, balance_inr: 0, 
-            monthly_credit_limit_inr: monthlyLimit, margin_multiplier: 1.60
-          });
-
-          if (isValidDbKey) await supabase.from('invite_codes').update({ is_active: false }).eq('code', inviteCode);
-        }
-
-        setMessage('Registration successful. You may now log in.');
-        setIsSigningUp(false);
-        setPassword('');
+        if (inviteCode) localStorage.setItem('pending_invite_code', inviteCode);
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        setMessage('Registration processing... check logs.');
+        // The onAuthStateChange listener above will catch the successful signup and provision the database automatically!
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setMessage('Access granted. Routing...');
-        
-        const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
-        window.location.replace(roleData?.role === 'admin' ? '/admin' : '/chat');
       }
     } catch (err: any) {
       setMessage(err.message || 'An error occurred.');
-    } finally {
       setLoading(false);
     }
   };
