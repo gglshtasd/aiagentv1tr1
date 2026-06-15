@@ -27,7 +27,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (incognito) writeEvent({ type: 'log', message: '> [SYSTEM] 🕶️ INCOGNITO ACTIVE. Database writes suspended.' });
 
-    // Execute Orchestrator Logic
     const route = await orchestrateRequest(user.id, prompt, mode, incognito);
     if (!route.success || !route.payload) throw new Error("Orchestrator routing failed.");
     
@@ -36,7 +35,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let formattedMessages: { role: string; content: string }[] = [];
     
-    // Memory Injection
     if (conversation_id && !incognito) {
       const { data: pastMessages } = await supabaseAdmin.from('messages').select('role, content').eq('conversation_id', conversation_id).order('created_at', { ascending: true });
       if (pastMessages) {
@@ -52,7 +50,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     formattedMessages.push({ role: 'user', content: prompt });
 
-    // Execute Inference
     const baseUrl = process.env.LITELLM_PROXY_URL || `https://bedrock-mantle.${region}.api.aws/v1/chat/completions`;
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     
@@ -63,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       headers['openai-project'] = process.env.BEDROCK_WORKSPACE_ID || '';
     }
 
-    writeEvent({ type: 'log', message: `> [NETWORK] Opening secure inference tunnel...` });
+    writeEvent({ type: 'log', message: `> [NETWORK] Opening secure inference tunnel to: ${baseUrl}` });
     
     let bedrockResponse = await fetch(baseUrl, {
       method: 'POST',
@@ -72,13 +69,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!bedrockResponse.ok) {
-        writeEvent({ type: 'log', message: `> [WARN] ${route.payload.model} failed. Auto-Fallback initiated...` });
+        const errorText = await bedrockResponse.text();
+        writeEvent({ type: 'log', message: `> [WARN] Target model failed (Status ${bedrockResponse.status}). Body: ${errorText}` });
+        writeEvent({ type: 'log', message: `> [SYSTEM] Initiating auto-fallback to base model...` });
+        
         bedrockResponse = await fetch(baseUrl, {
            method: 'POST',
            headers,
            body: JSON.stringify({ model: 'mistral.ministral-3-8b-instruct', messages: formattedMessages, stream: true })
         });
-        if (!bedrockResponse.ok) throw new Error(`Engine Error: ${bedrockResponse.statusText}`);
+        if (!bedrockResponse.ok) throw new Error(`Fallback Engine Error: ${bedrockResponse.statusText}. Please verify LiteLLM/Bedrock API Keys.`);
     }
 
     let fullAiResponse = '';
@@ -103,7 +103,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Ledger Update
     if (!incognito) {
       let targetConvId = conversation_id;
       if (!targetConvId) {
@@ -125,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error: any) {
     if(!incognito) await logSystemEvent('error', 'edge_routing', error.message);
-    writeEvent({ type: 'log', message: `> [FATAL] ${error.message}` });
+    writeEvent({ type: 'log', message: `> [FATAL EXCEPTION] ${error.message}` });
     writeEvent({ type: 'error', message: error.message });
     res.end();
   }
