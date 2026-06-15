@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const extractedData = JSON.parse(body.choices[0].message.content);
 
     // Save silently to Supabase Ledger
-    await supabaseClient
+    await supabase
       .from('users')
       .update({ developer_profile: extractedData })
       .eq('id', userId);
