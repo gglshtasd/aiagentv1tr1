@@ -1,8 +1,12 @@
 export async function generateTelemetryPayload() {
   let gpu_model = 'Unknown or Masked';
   let canvas_hash = 'Unknown';
-  let cpu_cores = navigator.hardwareConcurrency || 0;
-  let ram_gb = (navigator as any).deviceMemory || 0;
+  let cpu_cores =  0;
+  let ram_gb =  0;
+  // Add this safety check:
+  if (typeof window !== 'undefined') {
+    cpu_cores = navigator.hardwareConcurrency || 0;
+    ram_gb = (navigator as any).deviceMemory || 0;
 
   // 1. WebGL Hardware Extraction
   try {
@@ -40,6 +44,6 @@ export async function generateTelemetryPayload() {
       canvas_hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16); 
     }
   } catch (e) {}
-
+}
   return { gpu_model, canvas_hash, cpu_cores, ram_gb };
 }
