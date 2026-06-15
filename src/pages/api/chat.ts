@@ -14,9 +14,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
 
-  const sendLog = (msg: string) => res.write(`data: ${JSON.stringify({ type: 'log', message: msg })}\n\n`);
-  const sendToken = (text: string) => res.write(`data: ${JSON.stringify({ type: 'token', text })}\n\n`);
+  const sendLog = (msg: string) => { res.write(`data: ${JSON.stringify({ type: 'log', message: msg })}\n\n`); if ((res as any).flush) (res as any).flush(); };
+  const sendToken = (text: string) => { res.write(`data: ${JSON.stringify({ type: 'token', text })}\n\n`); if ((res as any).flush) (res as any).flush(); };
   const closeStream = () => { res.write(`data: [DONE]\n\n`); res.end(); };
 
   try {
@@ -26,34 +27,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sendLog(`> [AUTH] Validating secure JWT for mode: ${mode}...`);
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new Error("Unauthorized Access - Missing or Malformed Token");
+      throw new Error("Unauthorized Access - Missing Token");
     }
 
     const token = authHeader.split(' ')[1];
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
     
-    if (authError || !user) {
-      throw new Error(`Unauthorized Access - ${authError?.message || 'Invalid Session'}`);
-    }
+    if (authError || !user) throw new Error("Unauthorized Access - Invalid Session");
     sendLog(`> [AUTH] Session verified for user: ${user.id}`);
 
-    // 2. WALLET & BILLING INTERCEPTOR
-    sendLog(`> [LEDGER] Querying state ledger for wallet status...`);
-    const { data: wallet, error: walletError } = await supabase
-      .from('users_wallet')
-      .select('balance_inr, monthly_credit_limit_inr, is_blocked')
-      .eq('user_id', user.id)
-      .single();
+    if (incognito) sendLog(`> [SYSTEM] 🕶️ INCOGNITO ACTIVE. Database writes suspended.`);
 
-    // Auto-provision a wallet if it doesn't exist (helpful for early deployment)
-    if (!wallet) {
-      sendLog(`> [LEDGER] No wallet found. Auto-provisioning default credits...`);
-      await supabase.from('users_wallet').insert({ user_id: user.id, balance_inr: 0, monthly_credit_limit_inr: 500.00 });
-    } else if (wallet.is_blocked) {
-      throw new Error("Wallet Blocked - Insufficient Wallet Capacity");
-    }
+    // 2. WALLET & BILLING INTERCEPTOR (Bypass for now if auto-provisioning)
+    const { data: wallet } = await supabase.from('users_wallet').select('is_blocked').eq('user_id', user.id).single();
+    if (wallet?.is_blocked) throw new Error("Wallet Blocked - Insufficient Wallet Capacity");
 
-    // 3. 5-MODE ROUTING ENGINE
+    // 3. 5-MODE ROUTING ENGINE (Using your exact working model IDs)
     let targetModel = "";
     let workflow = "";
 
@@ -67,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         workflow = "web-browse-worker";
         break;
       case 'workspace':
-        targetModel = "google.gemma-27b-it";
+        targetModel = "google.gemma-3-27b-it";
         workflow = "standard-engineering";
         break;
       case 'dev':
@@ -89,36 +78,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     sendLog(`> [ROUTER] Assigned Workflow: ${workflow}`);
     sendLog(`> [ROUTER] Target Compute: [${targetModel}]`);
-    if (incognito) sendLog(`> [SYSTEM] 🕶️ INCOGNITO ACTIVE. Database writes suspended.`);
 
-    // 4. LITELLM PROXY NETWORK TUNNEL
-    const proxyUrl = process.env.LITELLM_PROXY_URL;
-    const proxyKey = process.env.LITELLM_MASTER_KEY;
+    // --- EXECUTION ENGINE ---
+    let llmResponse: Response | null = null;
+    let usingFallback = false;
 
-    if (!proxyUrl || proxyUrl.includes('127.0.0.1') || proxyUrl.includes('localhost')) {
-      throw new Error(`Misconfigured LITELLM_PROXY_URL. Currently set to: ${proxyUrl}. Must be the Azure VM Public IP.`);
+    // ATTEMPT 1: Azure VM LiteLLM Tunnel
+    try {
+      const proxyUrl = process.env.LITELLM_PROXY_URL;
+      if (proxyUrl && !proxyUrl.includes('127.0.0.1')) {
+        sendLog(`> [NETWORK] Opening secure inference tunnel to Azure VM: ${proxyUrl}...`);
+        llmResponse = await fetch(`${proxyUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.LITELLM_MASTER_KEY}`
+          },
+          body: JSON.stringify({ model: targetModel, messages: [{ role: 'user', content: prompt }], stream: true })
+        });
+        
+        if (!llmResponse.ok) throw new Error(`HTTP ${llmResponse.status}`);
+      } else {
+        throw new Error("Azure VM URL not configured correctly.");
+      }
+    } catch (proxyError: any) {
+      // ATTEMPT 2: Fail-safe Direct AWS Bedrock Mantle Connection
+      sendLog(`> [NETWORK WARNING] Azure VM Tunnel Failed: ${proxyError.message}`);
+      sendLog(`> [NETWORK] Triggering Fail-safe: Direct AWS Bedrock Mantle Connection...`);
+      usingFallback = true;
+      
+      const region = process.env.AWS_REGION || 'us-east-1';
+      llmResponse = await fetch(`https://bedrock-mantle.${region}.api.aws/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json', 
+          'x-api-key': process.env.BEDROCK_API_KEY!, 
+          'openai-project': process.env.BEDROCK_WORKSPACE_ID! 
+        },
+        body: JSON.stringify({ 
+          model: targetModel, 
+          messages: [{ role: 'user', content: prompt }], 
+          max_tokens: 4000, 
+          temperature: 0.7, 
+          stream: true 
+        })
+      });
+
+      if (!llmResponse.ok) throw new Error(`AWS Direct Engine Error: ${llmResponse.statusText}`);
+      sendLog(`> [NETWORK] AWS Direct Connection Established.`);
     }
 
-    sendLog(`> [NETWORK] Opening secure inference tunnel to: ${proxyUrl}/v1/chat/completions`);
+    if (!llmResponse) throw new Error("All inference routes failed.");
 
-    const llmResponse = await fetch(`${proxyUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${proxyKey}`
-      },
-      body: JSON.stringify({
-        model: targetModel,
-        messages: [{ role: 'user', content: prompt }],
-        stream: true
-      })
-    });
-
-    if (!llmResponse.ok) {
-      throw new Error(`LiteLLM Proxy rejected connection: HTTP ${llmResponse.status}`);
-    }
-
-    // 5. STREAM PROCESSING
+    // --- STREAM PROCESSING ---
     const reader = llmResponse.body?.getReader();
     const decoder = new TextDecoder();
     
@@ -129,17 +141,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (done) break;
       
       const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
       
       for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-          try {
-            const parsed = JSON.parse(line.replace('data: ', ''));
-            const content = parsed.choices[0]?.delta?.content;
-            if (content) sendToken(content);
-          } catch (e) {
-            // Ignore malformed JSON chunks from raw stream
-          }
+        const dataStr = line.replace('data: ', '').trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(dataStr);
+          // Handle standard OpenAI-compatible chunk format
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) sendToken(content);
+        } catch (e) {
+          // Ignore malformed JSON chunks
         }
       }
     }
