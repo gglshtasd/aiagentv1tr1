@@ -50,16 +50,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     sendLog(`> [ROUTER] Primary Target Compute: [${targetModel}]`);
 
-    // 3. EXECUTION ENGINE
+   // 3. EXECUTION ENGINE
     let llmResponse: Response | null = null;
     const awsRegion = process.env.AWS_REGION || 'us-east-1';
-    
-    // STANDARD AWS MANTLE HEADERS (Properly Formatted per Guide)
+
+    // --- AGENT INTERCEPTOR (TASK MODE) ---
+    if (mode === 'task') {
+      sendLog(`> [SYSTEM] Initializing AWS Lambda SmolAgents Sandbox...`);
+      const lambdaUrl = process.env.AWS_LAMBDA_AGENT_URL;
+      
+      if (!lambdaUrl) throw new Error("AWS_LAMBDA_AGENT_URL missing in environment.");
+
+      const agentRes = await fetch(lambdaUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, context: "Execute safely." })
+      });
+
+      const agentData = await agentRes.json();
+      
+      if (!agentData.success) {
+        sendLog(`> [LAMBDA CRASH] ${agentData.error}`);
+        throw new Error("Agent Sandbox execution failed.");
+      }
+
+      // Stream the internal Python execution logs to the frontend telemetry panel
+      const pythonLogs = agentData.telemetry.split('\n');
+      for (const log of pythonLogs) {
+        if (log.trim()) sendLog(`> [SMOLAGENTS] ${log}`);
+      }
+
+      // Stream the final answer to the chat canvas
+      sendLog(`> [SYSTEM] Agent task complete. Rendering output.`);
+      const answerTokens = agentData.answer.split(' ');
+      for (const token of answerTokens) {
+        sendToken(token + ' ');
+        await new Promise(r => setTimeout(r, 20)); // slight delay for smooth typing effect
+      }
+      
+      closeStream();
+      return;
+    }
+    // --- END AGENT INTERCEPTOR ---
+
+    // STANDARD AWS MANTLE HEADERS (For all other modes)
     const directAwsHeaders = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${process.env.BEDROCK_API_KEY}`,
       'OpenAI-Project': process.env.BEDROCK_WORKSPACE_ID!
     };
+    
+    // ... [Rest of the existing ATTEMPT 1 and ATTEMPT 2 logic remains the same] ...
 
     // ATTEMPT 1: Azure VM LiteLLM Tunnel
     try {
