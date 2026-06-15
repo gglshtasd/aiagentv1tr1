@@ -1,5 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../lib/supabase-client';
+import { createClient } from '@supabase/supabase-js';
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!, 
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Security: Only allow POST and verify admin secret here...
@@ -28,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const extractedData = JSON.parse(body.choices[0].message.content);
 
     // Save silently to Supabase Ledger
-    await supabase
+    await supabaseAdmin
       .from('users')
       .update({ developer_profile: extractedData })
       .eq('id', userId);
