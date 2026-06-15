@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabaseClient } from '../lib/supabase-client';
+import { supabase } from '../lib/supabase-client';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -11,18 +11,16 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
-// ... existing state variables ...
-
   useEffect(() => {
     console.log('[CLIENT] Login page mounted. Attaching Supabase listener...');
     
-    const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log(`[CLIENT] Auth Event Triggered: ${event}`);
       
       if (event === 'SIGNED_IN' && session) {
         console.log(`[CLIENT] User signed in locally: ${session.user.email}. Checking DB...`);
         
-        supabaseClient.from('users').select('role').eq('id', session.user.id).single()
+        supabase.from('users').select('role').eq('id', session.user.id).single()
           .then(({data, error}) => {
              if (error) console.error('[CLIENT] Database mapping error:', error);
              console.log(`[CLIENT] Database Role confirmed: ${data?.role}`);
@@ -42,7 +40,7 @@ export default function LoginPage() {
     console.log(`[CLIENT] Instructing Supabase to redirect back to: ${redirectTarget}`);
     
     try {
-      const { error } = await supabaseClient.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { 
           redirectTo: redirectTarget 
@@ -69,7 +67,7 @@ export default function LoginPage() {
         const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(inviteCode);
 
         if (!isMasterKey && isUUID) {
-          const { data: keyData } = await supabaseClient.from('invite_codes').select('*').eq('code', inviteCode).eq('is_active', true).maybeSingle();
+          const { data: keyData } = await supabase.from('invite_codes').select('*').eq('code', inviteCode).eq('is_active', true).maybeSingle();
           if (keyData) isValidDbKey = true;
         }
 
@@ -77,12 +75,12 @@ export default function LoginPage() {
           throw new Error('Access Denied: Invalid or Used Invite Key.');
         }
 
-        const { data: authData, error: authError } = await supabaseClient.auth.signUp({ email, password });
+        const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
         if (authError) throw authError;
 
         if (authData.user) {
           const assignedRole = isMasterKey ? 'admin' : 'user';
-          await supabaseClient.from('users').upsert({
+          await supabase.from('users').upsert({
             id: authData.user.id,
             email: email,
             role: assignedRole,
@@ -91,7 +89,7 @@ export default function LoginPage() {
           });
 
           if (isValidDbKey) {
-            await supabaseClient.from('invite_codes').update({ is_active: false }).eq('code', inviteCode);
+            await supabase.from('invite_codes').update({ is_active: false }).eq('code', inviteCode);
           }
         }
 
@@ -99,7 +97,7 @@ export default function LoginPage() {
         setIsSigningUp(false);
         setPassword('');
       } else {
-        const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setMessage('Access granted. Routing...');
         // The useEffect at the top will handle the actual redirection automatically
