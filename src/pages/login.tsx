@@ -1,15 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase-client';
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [isSigningUp, setIsSigningUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  
+  // Ref to prevent double-routing loops
+  const isRouting = useRef(false);
 
   useEffect(() => {
     console.log('[CLIENT] Login page mounted. Attaching Supabase listener...');
@@ -17,20 +22,22 @@ export default function LoginPage() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log(`[CLIENT] Auth Event Triggered: ${event}`);
       
-      if (event === 'SIGNED_IN' && session) {
+      if (event === 'SIGNED_IN' && session && !isRouting.current) {
+        isRouting.current = true; // Lock the router
         console.log(`[CLIENT] User signed in locally: ${session.user.email}. Checking DB...`);
         
         supabase.from('users').select('role').eq('id', session.user.id).single()
           .then(({data, error}) => {
              if (error) console.error('[CLIENT] Database mapping error:', error);
              console.log(`[CLIENT] Database Role confirmed: ${data?.role}`);
-             window.location.href = data?.role === 'admin' ? '/admin' : '/chat';
+             // Use Next.js Router replace to clear history and prevent loops
+             router.replace(data?.role === 'admin' ? '/admin' : '/chat');
           });
       }
     });
     
     return () => subscription.unsubscribe();
-  }, []);
+  }, [router]);
 
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -100,7 +107,7 @@ export default function LoginPage() {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         setMessage('Access granted. Routing...');
-        // The useEffect at the top will handle the actual redirection automatically
+        // The useEffect listener handles the routing automatically
       }
     } catch (err: any) {
       setMessage(err.message || 'An error occurred.');
