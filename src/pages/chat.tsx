@@ -22,13 +22,14 @@ export default function PremiumChat() {
 
   useEffect(() => {
     const initializeAuth = async () => {
+      console.log('[VERCEL LOG] Chat mounted. Verifying session...');
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setSessionToken(session.access_token);
-        // Fetch User Chat History
         const { data } = await supabase.from('conversations').select('id, title').eq('user_id', session.user.id).order('created_at', { ascending: false });
         if (data) setHistory(data);
       } else {
+        console.warn('[VERCEL LOG] No active session found. Redirecting to login.');
         window.location.replace('/login');
       }
     };
@@ -47,14 +48,27 @@ export default function PremiumChat() {
   };
 
   const handleLogout = async () => {
-    try { await supabase.auth.signOut(); } 
-    catch (e) { console.error(e); } 
+    console.log('[VERCEL LOG] Initiating full system purge and logout...');
+    try { 
+      await supabase.auth.signOut(); 
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (e) { console.error(e); } 
     finally { window.location.replace('/login'); }
+  };
+
+  const refreshTelemetry = async () => {
+    addLog("> [SYSTEM] Syncing backend telemetry...");
+    const { data } = await supabase.from('system_logs').select('*').order('created_at', { ascending: false }).limit(10);
+    if (data) {
+       data.reverse().forEach(log => addLog(`> [${log.level.toUpperCase()}] ${log.source}: ${log.message}`));
+    }
   };
 
   const sendMessage = async () => {
     if (!input.trim() || !sessionToken) return;
     
+    console.log(`[VERCEL LOG] Transmitting prompt in ${mode} mode...`);
     const userPrompt = input;
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userPrompt }]);
@@ -68,9 +82,9 @@ export default function PremiumChat() {
         body: JSON.stringify({ prompt: userPrompt, mode, incognito, conversation_id: convId })
       });
 
-      // CRITICAL FIX: Explicitly handle server/network crashes
       if (!res.ok) {
          const errorText = await res.text();
+         console.error(`[VERCEL LOG] HTTP ${res.status} Error: ${errorText}`);
          addLog(`> [NETWORK ERROR] Server returned HTTP ${res.status}: ${errorText}`);
          throw new Error(`HTTP ${res.status}`);
       }
@@ -115,7 +129,6 @@ export default function PremiumChat() {
     <div className="flex h-screen bg-[#0e1117] text-gray-200 font-sans">
       <Head><title>Orchestrator Workspace</title></Head>
 
-      {/* LEFT SIDEBAR: History */}
       <div className="w-64 bg-[#161b22] border-r border-gray-800 flex flex-col hidden md:flex">
         <div className="p-4 font-bold tracking-wider text-sm border-b border-gray-800 text-gray-400">WORKSPACE</div>
         <div className="p-4 flex-1 overflow-y-auto space-y-2 custom-scrollbar">
@@ -130,7 +143,6 @@ export default function PremiumChat() {
         </div>
       </div>
 
-      {/* CENTER: Main Chat Interface */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
         <header className="h-14 border-b border-gray-800 flex items-center justify-between px-6 bg-[#161b22]/50">
           <select value={mode} onChange={(e) => setMode(e.target.value)} className="bg-[#0d1117] border border-gray-700 rounded px-3 py-1.5 text-sm font-medium focus:outline-none">
@@ -148,7 +160,7 @@ export default function PremiumChat() {
                   <div className={`w-3 h-3 bg-gray-200 rounded-full absolute top-1 transition-all ${incognito ? 'left-6' : 'left-1'}`} />
                </button>
              </div>
-             <button onClick={handleLogout} className="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-red-900/50 px-3 py-1 rounded transition-colors">Logout</button>
+             <button onClick={handleLogout} className="text-xs text-red-400 hover:text-white bg-red-900/20 border border-red-900/50 hover:bg-red-900/50 px-3 py-1 rounded transition-colors">Logout</button>
           </div>
         </header>
 
@@ -181,11 +193,13 @@ export default function PremiumChat() {
         </div>
       </div>
 
-      {/* RIGHT SIDEBAR: Telemetry */}
       <div className="w-80 bg-black border-l border-gray-800 flex flex-col hidden lg:flex">
         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#0d1117]">
            <span className="text-xs font-mono text-gray-400 font-bold tracking-widest flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> TELEMETRY SINK</span>
-           <button onClick={() => setTelemetry([])} className="text-[10px] text-gray-600 hover:text-gray-300">CLEAR</button>
+           <div className="flex gap-2">
+             <button onClick={refreshTelemetry} className="text-[10px] bg-blue-900/30 text-blue-400 px-2 py-0.5 rounded border border-blue-900/50 hover:bg-blue-900/50">FETCH LOGS</button>
+             <button onClick={() => setTelemetry([])} className="text-[10px] text-gray-600 hover:text-gray-300">CLEAR</button>
+           </div>
         </div>
         <div className="flex-1 p-4 overflow-y-auto font-mono text-[11px] text-gray-400 space-y-1.5 bg-[#0a0a0a]">
           {telemetry.map((log, i) => <div key={i} className={`${log.includes('[ERROR]') || log.includes('[FATAL]') ? 'text-red-400 font-bold' : log.includes('[SYSTEM]') ? 'text-green-400' : 'text-gray-500'}`}>{log}</div>)}
