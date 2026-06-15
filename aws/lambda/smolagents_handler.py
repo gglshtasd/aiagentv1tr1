@@ -9,14 +9,15 @@ def lambda_handler(event, context):
     """
     AWS Lambda Entrypoint for Tier 5 Action Guild (Task Mode)
     """
+    old_stdout = sys.stdout
     try:
         body = json.loads(event.get('body', '{}'))
         prompt = body.get('prompt', '')
         injected_context = body.get('context', '')
         
-        # Configure LiteLLM proxy pointing back to your Bedrock setup
+        # Correctly formatted model ID matching your Azure LiteLLM / AWS Mantle config
         model = LiteLLMModel(
-            model_id="glm.4-7-flash", 
+            model_id="zai.glm-4.7-flash", 
             api_base=os.environ.get("LITELLM_PROXY_URL"),
             api_key=os.environ.get("LITELLM_API_KEY")
         )
@@ -25,7 +26,6 @@ def lambda_handler(event, context):
         agent = CodeAgent(tools=[], model=model, add_base_tools=True)
         
         # Capture stdout so we can stream the "techno-feel" logs back to the Vercel Telemetry Panel
-        old_stdout = sys.stdout
         sys.stdout = mystdout = StringIO()
         
         system_prompt = f"Context: {injected_context}\nTask: {prompt}"
@@ -33,6 +33,7 @@ def lambda_handler(event, context):
         # Execute the generated code
         final_answer = agent.run(system_prompt)
         
+        # Restore stdout immediately after execution
         sys.stdout = old_stdout
         execution_logs = mystdout.getvalue()
         
@@ -46,6 +47,7 @@ def lambda_handler(event, context):
         }
         
     except Exception as e:
+        sys.stdout = old_stdout
         return {
             'statusCode': 500,
             'body': json.dumps({
