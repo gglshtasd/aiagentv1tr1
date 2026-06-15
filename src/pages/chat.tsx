@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import { supabase } from '../lib/supabase-client';
 import MarkdownRenderer from '../components/MarkdownRenderer';
+import CodeBlock from '../components/CodeBlock';
 
 interface Message { role: 'user' | 'assistant'; content: string; }
 interface HistoryItem { id: string; title: string; }
+interface ActiveCanvas { language: string; code: string; }
 
 export default function PremiumChat() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -16,6 +18,7 @@ export default function PremiumChat() {
   const [telemetry, setTelemetry] = useState<string[]>([]);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [convId, setConvId] = useState<string | null>(null);
+  const [activeCanvas, setActiveCanvas] = useState<ActiveCanvas | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const telemetryEndRef = useRef<HTMLDivElement>(null);
@@ -36,6 +39,22 @@ export default function PremiumChat() {
     initializeAuth();
   }, []);
 
+  // Intercept code blocks to feed the Interactive Canvas
+  useEffect(() => {
+    if (messages.length > 0) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === 'assistant') {
+        const regex = /```(\w+)?\n([\s\S]*?)```/g;
+        let match;
+        let lastExtracted = null;
+        while ((match = regex.exec(lastMsg.content)) !== null) {
+          lastExtracted = { language: match[1] || 'text', code: match[2] };
+        }
+        if (lastExtracted) setActiveCanvas(lastExtracted);
+      }
+    }
+  }, [messages]);
+
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { telemetryEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [telemetry]);
 
@@ -43,12 +62,12 @@ export default function PremiumChat() {
 
   const loadConversation = async (id: string) => {
     setConvId(id);
+    setActiveCanvas(null);
     const { data } = await supabase.from('messages').select('role, content').eq('conversation_id', id).order('created_at', { ascending: true });
     if (data) setMessages(data as Message[]);
   };
 
   const handleLogout = async () => {
-    console.log('[VERCEL LOG] Initiating full system purge and logout...');
     try { 
       await supabase.auth.signOut(); 
       localStorage.clear();
@@ -68,7 +87,6 @@ export default function PremiumChat() {
   const sendMessage = async () => {
     if (!input.trim() || !sessionToken) return;
     
-    console.log(`[VERCEL LOG] Transmitting prompt in ${mode} mode...`);
     const userPrompt = input;
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userPrompt }]);
@@ -84,8 +102,13 @@ export default function PremiumChat() {
 
       if (!res.ok) {
          const errorText = await res.text();
-         console.error(`[VERCEL LOG] HTTP ${res.status} Error: ${errorText}`);
          addLog(`> [NETWORK ERROR] Server returned HTTP ${res.status}: ${errorText}`);
+         // Fallback Logic: Try a simpler route or inform user
+         setMessages(prev => {
+            const newMsgs = [...prev];
+            newMsgs[newMsgs.length - 1].content = `**System Error:** Connection failed. Check Telemetry panel.`;
+            return newMsgs;
+         });
          throw new Error(`HTTP ${res.status}`);
       }
 
@@ -126,13 +149,14 @@ export default function PremiumChat() {
   };
 
   return (
-    <div className="flex h-screen bg-[#0e1117] text-gray-200 font-sans">
+    <div className="flex h-screen bg-[#0e1117] text-gray-200 font-sans overflow-hidden">
       <Head><title>Orchestrator Workspace</title></Head>
 
-      <div className="w-64 bg-[#161b22] border-r border-gray-800 flex flex-col hidden md:flex">
+      {/* Sidebar Navigation */}
+      <div className="w-64 bg-[#161b22] border-r border-gray-800 flex flex-col hidden md:flex shrink-0">
         <div className="p-4 font-bold tracking-wider text-sm border-b border-gray-800 text-gray-400">WORKSPACE</div>
         <div className="p-4 flex-1 overflow-y-auto space-y-2 custom-scrollbar">
-          <button onClick={() => { setConvId(null); setMessages([]); }} className="w-full text-left p-2 rounded bg-blue-900/20 hover:bg-blue-900/40 border border-blue-900 text-sm transition-colors text-blue-400 mb-4">
+          <button onClick={() => { setConvId(null); setMessages([]); setActiveCanvas(null); }} className="w-full text-left p-2 rounded bg-blue-900/20 hover:bg-blue-900/40 border border-blue-900 text-sm transition-colors text-blue-400 mb-4 shadow-lg">
             + New Chat Session
           </button>
           {history.map(h => (
@@ -143,8 +167,9 @@ export default function PremiumChat() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
-        <header className="h-14 border-b border-gray-800 flex items-center justify-between px-6 bg-[#161b22]/50">
+      <div className="flex-1 flex flex-col min-w-0 bg-[#0d1117] relative">
+        {/* Header Controls */}
+        <header className="h-14 border-b border-gray-800 flex items-center justify-between px-6 bg-[#161b22] shrink-0 z-10">
           <select value={mode} onChange={(e) => setMode(e.target.value)} className="bg-[#0d1117] border border-gray-700 rounded px-3 py-1.5 text-sm font-medium focus:outline-none">
             <option value="budget">Budget Mode (Gemma 4B)</option>
             <option value="info">Web Search Mode (Gemma 12B)</option>
@@ -156,7 +181,7 @@ export default function PremiumChat() {
           <div className="flex items-center gap-4">
              <div className="flex items-center gap-2">
                <span className="text-xs text-gray-500 font-mono tracking-widest uppercase">Incognito</span>
-               <button onClick={() => { setIncognito(!incognito); setConvId(null); setMessages([]); }} className={`w-10 h-5 rounded-full relative transition-colors ${incognito ? 'bg-red-900' : 'bg-gray-700'}`}>
+               <button onClick={() => { setIncognito(!incognito); setConvId(null); setMessages([]); setActiveCanvas(null); }} className={`w-10 h-5 rounded-full relative transition-colors ${incognito ? 'bg-red-900' : 'bg-gray-700'}`}>
                   <div className={`w-3 h-3 bg-gray-200 rounded-full absolute top-1 transition-all ${incognito ? 'left-6' : 'left-1'}`} />
                </button>
              </div>
@@ -164,36 +189,61 @@ export default function PremiumChat() {
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
-          <div className="max-w-3xl mx-auto space-y-8 pb-32">
-            {messages.length === 0 ? (
-              <div className="text-center text-gray-500 mt-20 flex flex-col items-center">
-                <div className="w-16 h-16 bg-blue-900/20 rounded-full flex items-center justify-center mb-4"><svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg></div>
-                <h2 className="text-xl font-bold text-gray-300">Orchestrator Online.</h2>
-              </div>
-            ) : (
-              messages.map((m, i) => (
-                <div key={i} className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  {m.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-900/50 border border-blue-800 flex items-center justify-center shrink-0 mt-1"><svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg></div>}
-                  <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${m.role === 'user' ? 'bg-[#238636] text-white rounded-br-sm' : 'bg-[#161b22] border border-gray-800 text-gray-200 rounded-bl-sm shadow-sm'}`}>
-                    {m.role === 'user' ? <div className="whitespace-pre-wrap">{m.content}</div> : <MarkdownRenderer content={m.content} />}
-                  </div>
+        {/* Dynamic Workspace Area */}
+        <div className="flex-1 flex overflow-hidden">
+          
+          {/* Main Chat Feed */}
+          <div className={`flex-1 overflow-y-auto p-6 scroll-smooth pb-32 ${activeCanvas ? 'border-r border-gray-800 max-w-[50%]' : ''}`}>
+            <div className="max-w-3xl mx-auto space-y-8">
+              {messages.length === 0 ? (
+                <div className="text-center text-gray-500 mt-20 flex flex-col items-center">
+                  <div className="w-16 h-16 bg-blue-900/20 rounded-full flex items-center justify-center mb-4"><svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg></div>
+                  <h2 className="text-xl font-bold text-gray-300">Orchestrator Online.</h2>
                 </div>
-              ))
-            )}
-            <div ref={messagesEndRef} />
+              ) : (
+                messages.map((m, i) => (
+                  <div key={i} className={`flex gap-4 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {m.role === 'assistant' && <div className="w-8 h-8 rounded-full bg-blue-900/50 border border-blue-800 flex items-center justify-center shrink-0 mt-1"><svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg></div>}
+                    <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${m.role === 'user' ? 'bg-[#238636] text-white rounded-br-sm shadow-md' : 'bg-[#161b22] border border-gray-800 text-gray-200 rounded-bl-sm shadow-sm'}`}>
+                      {m.role === 'user' ? <div className="whitespace-pre-wrap">{m.content}</div> : <MarkdownRenderer content={m.content} />}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
+
+          {/* Interactive Code Canvas Panel */}
+          {activeCanvas && (
+            <div className="flex-1 bg-[#0a0c10] flex flex-col animate-fade-in-right">
+              <div className="h-12 border-b border-gray-800 flex items-center justify-between px-4 bg-[#161b22]">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg>
+                  <span className="text-xs font-bold text-gray-300 tracking-wider">ARTIFACT CANVAS</span>
+                </div>
+                <button onClick={() => setActiveCanvas(null)} className="text-gray-500 hover:text-white transition-colors">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+              </div>
+              <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
+                <CodeBlock language={activeCanvas.language} value={activeCanvas.code} />
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="p-4 bg-gradient-to-t from-[#0d1117] via-[#0d1117] to-transparent absolute bottom-0 left-0 right-0 md:left-64 lg:right-80">
+        {/* Input Textbox Area */}
+        <div className={`p-4 bg-gradient-to-t from-[#0d1117] via-[#0d1117] to-transparent absolute bottom-0 left-0 right-0 z-20 ${activeCanvas ? 'md:w-1/2' : ''}`}>
           <div className="max-w-3xl mx-auto relative group">
-            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} placeholder="Ask the orchestrator..." className="w-full bg-[#161b22] border border-gray-700 text-gray-100 rounded-xl pl-4 pr-12 py-4 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none shadow-xl transition-all h-[56px] min-h-[56px] max-h-[200px]" rows={1} />
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} placeholder="Ask the orchestrator..." className="w-full bg-[#161b22] border border-gray-700 text-gray-100 rounded-xl pl-4 pr-12 py-4 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none shadow-2xl transition-all h-[56px] min-h-[56px] max-h-[200px]" rows={1} />
             <button onClick={sendMessage} disabled={loading || !input.trim()} className="absolute right-3 top-3 p-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded-lg transition-colors"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg></button>
           </div>
         </div>
       </div>
 
-      <div className="w-80 bg-black border-l border-gray-800 flex flex-col hidden lg:flex">
+      {/* Telemetry Dashboard */}
+      <div className="w-80 bg-black border-l border-gray-800 flex flex-col hidden lg:flex shrink-0">
         <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#0d1117]">
            <span className="text-xs font-mono text-gray-400 font-bold tracking-widest flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> TELEMETRY SINK</span>
            <div className="flex gap-2">
