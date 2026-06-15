@@ -1,11 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/router';
+import { useState } from 'react';
 import { supabase } from '../lib/supabase-client';
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -49,13 +47,20 @@ export default function LoginPage() {
 
         if (authData.user) {
           const assignedRole = isMasterKey ? 'admin' : 'user';
+          const monthlyLimit = isMasterKey ? 50000 : 500;
+          
+          // 1. Create Core User
           await supabase.from('users').upsert({
-            id: authData.user.id,
-            email: email,
-            role: assignedRole,
-            advanced_mode_enabled: isMasterKey,
-            monthly_credit_limit_inr: isMasterKey ? 50000 : 500 
+            id: authData.user.id, email: email, role: assignedRole,
+            advanced_mode_enabled: isMasterKey, monthly_credit_limit_inr: monthlyLimit
           });
+
+          // 2. Initialize Ledger Wallet (FIXED)
+          await supabase.from('users_wallet').upsert({
+            user_id: authData.user.id, balance_inr: 0, 
+            monthly_credit_limit_inr: monthlyLimit, margin_multiplier: 1.60
+          });
+
           if (isValidDbKey) await supabase.from('invite_codes').update({ is_active: false }).eq('code', inviteCode);
         }
 
@@ -67,9 +72,8 @@ export default function LoginPage() {
         if (error) throw error;
         setMessage('Access granted. Routing...');
         
-        // CRITICAL FIX: Direct hard-routing to bypass React state delays
         const { data: roleData } = await supabase.from('users').select('role').eq('id', data.user.id).single();
-        window.location.href = roleData?.role === 'admin' ? '/admin' : '/chat';
+        window.location.replace(roleData?.role === 'admin' ? '/admin' : '/chat');
       }
     } catch (err: any) {
       setMessage(err.message || 'An error occurred.');
@@ -91,28 +95,13 @@ export default function LoginPage() {
         <div className="flex items-center mb-6"><div className="flex-grow border-t border-gray-600"></div><span className="flex-shrink-0 px-4 text-gray-400 text-xs uppercase">Or Secure Email</span><div className="flex-grow border-t border-gray-600"></div></div>
 
         <form onSubmit={handleEmailAuth} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-400">Email Vector</label>
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" required />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1 text-gray-400">Passcode</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" required />
-          </div>
-          {isSigningUp && (
-            <div>
-              <label className="block text-sm font-medium mb-1 text-blue-400">Invite Code</label>
-              <input type="text" value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-blue-600 rounded text-white outline-none" required placeholder="Paste UUID here..." />
-            </div>
-          )}
-          <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mt-2 transition-colors">
-            {loading ? 'Processing...' : (isSigningUp ? 'Register Account' : 'Initialize Login')}
-          </button>
+          <div><label className="block text-sm font-medium mb-1 text-gray-400">Email Vector</label><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" required /></div>
+          <div><label className="block text-sm font-medium mb-1 text-gray-400">Passcode</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" required /></div>
+          {isSigningUp && <div><label className="block text-sm font-medium mb-1 text-blue-400">Invite Code</label><input type="text" value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} className="w-full px-4 py-2 bg-gray-900 border border-blue-600 rounded text-white outline-none" required placeholder="Paste UUID here..." /></div>}
+          <button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mt-2 transition-colors">{loading ? 'Processing...' : (isSigningUp ? 'Register Account' : 'Initialize Login')}</button>
         </form>
 
-        <button onClick={() => { setIsSigningUp(!isSigningUp); setMessage(''); }} className="w-full mt-5 text-sm text-gray-400 hover:text-white transition-colors">
-          {isSigningUp ? 'Already have an account? Log in' : 'Need an account? Enter Invite Code'}
-        </button>
+        <button onClick={() => { setIsSigningUp(!isSigningUp); setMessage(''); }} className="w-full mt-5 text-sm text-gray-400 hover:text-white transition-colors">{isSigningUp ? 'Already have an account? Log in' : 'Need an account? Enter Invite Code'}</button>
         {message && <p className={`mt-4 text-center text-sm font-medium ${message.includes('Error') || message.includes('Denied') ? 'text-red-400' : 'text-green-400'}`}>{message}</p>}
       </div>
     </div>
