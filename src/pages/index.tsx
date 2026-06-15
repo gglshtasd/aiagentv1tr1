@@ -1,37 +1,39 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase-client';
 
 export default function IndexPage() {
   const router = useRouter();
+  const isRouting = useRef(false);
 
   useEffect(() => {
     const checkUserRoleAndRoute = async (session: any) => {
-      // Query the database to check if this user is the Admin
+      if (isRouting.current) return;
+      isRouting.current = true;
+
       const { data: userRecord } = await supabase
         .from('users')
         .select('role')
         .eq('id', session.user.id)
         .single();
 
-      if (userRecord?.role === 'admin') {
-        router.push('/admin');
-      } else {
-        router.push('/chat');
-      }
+      router.replace(userRecord?.role === 'admin' ? '/admin' : '/chat');
     };
 
-    // 1. Listen for the Google ?code= exchange completing in the background
+    // 1. Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session) {
         checkUserRoleAndRoute(session);
       }
     });
 
-    // 2. Fallback check: If they land here and are already logged in or not logged in
+    // 2. Fallback check for existing sessions
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session && !window.location.href.includes('code=')) {
-        router.push('/login');
+        if (!isRouting.current) {
+          isRouting.current = true;
+          router.replace('/login');
+        }
       } else if (session) {
         checkUserRoleAndRoute(session);
       }
