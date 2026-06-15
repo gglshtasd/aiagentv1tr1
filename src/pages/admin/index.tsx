@@ -39,8 +39,9 @@ export default function MasterAdminHub() {
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    window.location.href = '/login';
+    try { await supabase.auth.signOut(); } 
+    catch (e) { console.error(e); } 
+    finally { window.location.replace('/login'); }
   };
 
   if (loading) return <div className="min-h-screen bg-gray-950 text-green-400 font-mono p-8 flex items-center justify-center">INITIALIZING SECURE UPLINK...</div>;
