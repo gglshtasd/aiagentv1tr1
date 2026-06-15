@@ -39,8 +39,12 @@ export default function MasterAdminHub() {
   };
 
   const handleLogout = async () => {
-    try { await supabase.auth.signOut(); } 
-    catch (e) { console.error(e); } 
+    console.log('[VERCEL LOG] Admin initiating secure logout purge...');
+    try { 
+      await supabase.auth.signOut(); 
+      localStorage.clear();
+      sessionStorage.clear();
+    } catch (e) { console.error(e); } 
     finally { window.location.replace('/login'); }
   };
 
