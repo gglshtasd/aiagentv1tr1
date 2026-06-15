@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { supabaseClient } from '../lib/supabase-client';
+import { supabase } from '../lib/supabase-client';
 
 export default function AgentGateway() {
   const [prompt, setPrompt] = useState('');
@@ -15,7 +15,8 @@ export default function AgentGateway() {
     e.preventDefault();
     setStatus('ESTIMATING');
     
-    const { data: { session } } = await supabaseClient.auth.getSession();
+    // Changed 'supabaseClient' to 'supabase'
+    const { data: { session } } = await supabase.auth.getSession();
     
     try {
       const res = await fetch('/api/classify', {
@@ -26,7 +27,7 @@ export default function AgentGateway() {
         },
         body: JSON.stringify({
           prompt,
-          user_id: session?.user.id,
+          user_id: session?.user?.id,
           requested_tier: tier
         }),
       });
@@ -44,7 +45,8 @@ export default function AgentGateway() {
   // Phase 2: Execution Routing
   const handleExecute = async () => {
     setStatus('EXECUTING');
-    const { data: { session } } = await supabaseClient.auth.getSession();
+    // Changed 'supabaseClient' to 'supabase'
+    const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
 
     let endpoint = '/api/chat';
