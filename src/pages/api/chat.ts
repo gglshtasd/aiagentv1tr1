@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     writeEvent({ type: 'log', message: `> [ROUTER] Assigned Workflow: ${route.payload.workflow}` });
     writeEvent({ type: 'log', message: `> [ROUTER] Target Compute: [${route.payload.model}]` });
 
-    let formattedMessages = [];
+    let formattedMessages: { role: string; content: string }[] = [];
     
     // Memory Injection
     if (conversation_id && !incognito) {
