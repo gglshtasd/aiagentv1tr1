@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 import { supabase } from '../lib/supabase-client';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 
@@ -9,6 +10,7 @@ interface Message {
 }
 
 export default function PremiumChat() {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [mode, setMode] = useState('budget');
@@ -22,16 +24,27 @@ export default function PremiumChat() {
   const telemetryEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Safely check session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) setSessionToken(session.access_token);
-      else window.location.href = '/login';
+      if (session) {
+        setSessionToken(session.access_token);
+      } else {
+        router.replace('/login');
+      }
     });
-  }, []);
+  }, [router]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { telemetryEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [telemetry]);
 
   const addLog = (msg: string) => setTelemetry(prev => [...prev, msg]);
+
+  // Safe Logout Handler
+  const handleLogout = async () => {
+    addLog('> [SYSTEM] Initiating secure logout sequence...');
+    await supabase.auth.signOut();
+    router.replace('/login');
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || !sessionToken) return;
@@ -120,13 +133,22 @@ export default function PremiumChat() {
               <option value="architect">Architect Mode (Unrestricted)</option>
             </select>
           </div>
-          <div className="flex items-center gap-2">
-             <span className="text-xs text-gray-500 font-mono tracking-widest uppercase">Incognito</span>
+          <div className="flex items-center gap-4">
+             <div className="flex items-center gap-2">
+               <span className="text-xs text-gray-500 font-mono tracking-widest uppercase">Incognito</span>
+               <button 
+                  onClick={() => { setIncognito(!incognito); setConvId(null); setMessages([]); }}
+                  className={`w-10 h-5 rounded-full relative transition-colors ${incognito ? 'bg-red-900' : 'bg-gray-700'}`}
+               >
+                  <div className={`w-3 h-3 bg-gray-200 rounded-full absolute top-1 transition-all ${incognito ? 'left-6' : 'left-1'}`} />
+               </button>
+             </div>
+             {/* New Logout Button */}
              <button 
-                onClick={() => { setIncognito(!incognito); setConvId(null); setMessages([]); }}
-                className={`w-10 h-5 rounded-full relative transition-colors ${incognito ? 'bg-red-900' : 'bg-gray-700'}`}
+                onClick={handleLogout}
+                className="text-xs text-gray-400 hover:text-white bg-gray-800 hover:bg-red-900/50 px-3 py-1 rounded transition-colors"
              >
-                <div className={`w-3 h-3 bg-gray-200 rounded-full absolute top-1 transition-all ${incognito ? 'left-6' : 'left-1'}`} />
+               Logout
              </button>
           </div>
         </header>
