@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabaseClient } from '../lib/supabase-client';
+import { supabase } from '../lib/supabase-client';
 
 interface ModelItem {
   model_id: string;
@@ -19,7 +19,8 @@ export default function ModelSelector({ selectedModelId, onModelSelect }: ModelS
 
   useEffect(() => {
     async function loadAvailableModels() {
-      const { data, error } = await supabaseClient
+      // Changed 'supabaseClient' to 'supabase' to match the export in supabase-client.ts
+      const { data, error } = await supabase
         .from('model_registry')
         .select('*')
         .eq('is_available', true); // Only display verified functional models
