@@ -43,7 +43,7 @@ export default function PremiumChat() {
   const handleLogout = async () => {
     addLog('> [SYSTEM] Initiating secure logout sequence...');
     await supabase.auth.signOut();
-    router.replace('/login');
+    window.location.href = '/login'; // Hard redirect kills active local memory
   };
 
   const sendMessage = async () => {
